@@ -62,6 +62,8 @@ Update the `.env` file with your PostgreSQL settings before running migrations o
 | `GET /customers` | Retrieve all customers. |
 | `PATCH /customers/:id` | Update core customer fields (contact/address/personal/business). |
 | `GET /users` | Retrieve all users with their profiles. |
+| `GET /collectors` | Retrieve all collectors. |
+| `PATCH /collectors/:id` | Update collector profile and linked user basics. |
 
 All incoming DTOs are validated automatically via Nest's global `ValidationPipe`.
 

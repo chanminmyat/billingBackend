@@ -60,14 +60,30 @@ export class AuthService {
   }
 
   async createCollectorAccount(dto: CreateCollectorDto) {
-    const { profile } = dto;
-    const user = await this.usersService.createUser(
-      this.buildCreateUserPayload(dto, UserRole.COLLECTOR),
-    );
-
-    if (profile) {
-      await this.collectorsService.upsertProfile(user, profile);
+    const { collector } = dto;
+    if (!collector) {
+      throw new BadRequestException('Collector details are required');
     }
+
+    const collectorCode = await this.collectorsService.generateCollectorCode();
+    const password = this.extractNrcPassword(collector.nrc);
+    const username = collectorCode;
+
+    const user = await this.usersService.createUser({
+      name: collector.name,
+      email: collector.email,
+      phone: collector.phone,
+      username,
+      password,
+      role: UserRole.COLLECTOR,
+      status: this.mapUserStatus(collector.status),
+    });
+
+    await this.collectorsService.createCollectorProfileFromIntake(
+      user,
+      collectorCode,
+      collector,
+    );
 
     return this.usersService.buildPublicProfile(user.id);
   }
@@ -220,6 +236,14 @@ export class AuthService {
 
     const password = digits.slice(-6);
     return { email, name, nrc: password };
+  }
+
+  private extractNrcPassword(nrc: string): string {
+    const digits = nrc.replace(/\D/g, '');
+    if (digits.length < 6) {
+      throw new BadRequestException('NRC must include at least 6 digits');
+    }
+    return digits.slice(-6);
   }
 
   private mapUserStatus(status?: string): UserStatus {

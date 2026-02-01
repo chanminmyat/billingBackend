@@ -24,6 +24,9 @@ export class CollectorProfile {
   township?: string | null;
 
   @Column({ length: 120, nullable: true })
+  area?: string | null;
+
+  @Column({ length: 120, nullable: true })
   region?: string | null;
 
   @Column({ length: 120, nullable: true })
@@ -31,6 +34,12 @@ export class CollectorProfile {
 
   @Column({ length: 200, nullable: true })
   notes?: string | null;
+
+  @Column({ length: 50, nullable: true })
+  nrc?: string | null;
+
+  @Column({ length: 50, nullable: true })
+  status?: string | null;
 
   @OneToOne(() => User, (user) => user.collectorProfile, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'user_id' })

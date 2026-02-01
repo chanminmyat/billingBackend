@@ -1,13 +1,11 @@
-import { ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsOptional, ValidateNested } from 'class-validator';
-import { UpsertCollectorProfileDto } from '../../collectors/dto/upsert-collector-profile.dto';
-import { CreateAccountBaseDto } from '../../users/dto/create-account-base.dto';
+import { ValidateNested } from 'class-validator';
+import { CollectorIntakeDto } from '../../collectors/dto/collector-intake.dto';
 
-export class CreateCollectorDto extends CreateAccountBaseDto {
-  @ApiPropertyOptional({ type: UpsertCollectorProfileDto })
-  @IsOptional()
+export class CreateCollectorDto {
+  @ApiProperty({ type: CollectorIntakeDto })
   @ValidateNested()
-  @Type(() => UpsertCollectorProfileDto)
-  profile?: UpsertCollectorProfileDto;
+  @Type(() => CollectorIntakeDto)
+  collector: CollectorIntakeDto;
 }

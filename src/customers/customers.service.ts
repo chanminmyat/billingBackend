@@ -5,6 +5,7 @@ import { BillingCycle } from '../common/enums/billing-cycle.enum';
 import { CustomerStatus } from '../common/enums/customer-status.enum';
 import { CustomerType } from '../common/enums/customer-type.enum';
 import { IpType } from '../common/enums/ip-type.enum';
+import { UserStatus } from '../common/enums/user-status.enum';
 import { Bill } from '../billing/entities/bill.entity';
 import { Plan } from '../plans/entities/plan.entity';
 import { SubscriptionNetwork } from '../subscription-networks/entities/subscription-network.entity';
@@ -47,6 +48,7 @@ export class CustomersService {
   ): Promise<Customer> {
     const customer = await this.customersRepository.findOne({
       where: { id: customerId },
+      relations: { user: true },
     });
 
     if (!customer) {
@@ -61,7 +63,17 @@ export class CustomersService {
     this.validateCustomerTypeRules(merged.customerType, merged);
 
     this.customersRepository.merge(customer, payload);
-    return this.customersRepository.save(customer);
+    const saved = await this.customersRepository.save(customer);
+
+    if (payload.status && customer.user) {
+      customer.user.status =
+        payload.status === CustomerStatus.ENABLE
+          ? UserStatus.ACTIVE
+          : UserStatus.INACTIVE;
+      await this.customersRepository.manager.save(customer.user);
+    }
+
+    return saved;
   }
 
   async getAllCustomers(): Promise<
