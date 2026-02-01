@@ -83,6 +83,31 @@ Swagger UI is live at [`/docs`](http://localhost:4000/docs) once the server is r
 - `yarn test` – Execute unit tests (none yet for this module)
 - `yarn lint` – ESLint + Prettier
 
+## Deploy on Render
+
+1. Push this repo to GitHub.
+2. Create a Render **Web Service** (Node).
+3. Build command:
+   ```
+   yarn install && yarn build
+   ```
+4. Start command:
+   ```
+   node dist/main.js
+   ```
+5. Add environment variables:
+   ```
+   DATABASE_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+   DB_SSL=true
+   NODE_ENV=production
+   PORT=10000
+   ```
+6. CORS is already configured for:
+   - `http://localhost:3000`
+   - `https://billcollection.vercel.app`
+
+Render will assign a public URL like `https://your-service.onrender.com`.
+
 ## Testing Notes
 
 `yarn build` compiles the project and validates that the new modules wire up correctly. Add integration tests once database containers are available.
