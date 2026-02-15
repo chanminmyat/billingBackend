@@ -49,6 +49,9 @@ export class Customer {
   billingMapLink?: string | null;
 
   @Column({ nullable: true })
+  collectorCode?: string | null;
+
+  @Column({ nullable: true })
   personalName?: string | null;
 
   @Column({ nullable: true })

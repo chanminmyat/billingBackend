@@ -82,6 +82,7 @@ export class CustomersService {
       customerCode: string;
       customerType: CustomerType;
       status: CustomerStatus;
+      collectorCode?: string | null;
       companyName?: string | null;
       personalName?: string | null;
       primaryPhone: string;
@@ -132,6 +133,7 @@ export class CustomersService {
         customerCode: customer.customerCode,
         customerType: customer.customerType,
         status: customer.status,
+        collectorCode: customer.collectorCode ?? null,
         companyName: customer.companyName ?? null,
         personalName: customer.personalName ?? null,
         primaryPhone: customer.primaryPhone,

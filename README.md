@@ -64,6 +64,8 @@ Update the `.env` file with your PostgreSQL settings before running migrations o
 | `GET /users` | Retrieve all users with their profiles. |
 | `GET /collectors` | Retrieve all collectors. |
 | `PATCH /collectors/:id` | Update collector profile and linked user basics. |
+| `POST /plans` | Create a plan (planCode, planName, bandwidthPlan, monthlyFee, currency, isActive). |
+| `PATCH /plans/:id` | Update a plan. |
 
 All incoming DTOs are validated automatically via Nest's global `ValidationPipe`.
 

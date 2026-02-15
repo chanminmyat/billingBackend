@@ -41,6 +41,11 @@ export class CreateCustomerDetailsDto {
   @IsString()
   billingAddress?: string;
 
+  @ApiPropertyOptional({ example: 'col000001' })
+  @IsOptional()
+  @IsString()
+  collectorCode?: string | null;
+
   @ApiPropertyOptional({ example: 'Mg Aung' })
   @ValidateIf((dto) => dto.customerType === CustomerType.INDIVIDUAL)
   @IsString()
