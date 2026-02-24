@@ -7,6 +7,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -14,6 +15,11 @@ import { BillingCycle } from '../../common/enums/billing-cycle.enum';
 import { CustomerStatus } from '../../common/enums/customer-status.enum';
 import { CustomerType } from '../../common/enums/customer-type.enum';
 import { IpType } from '../../common/enums/ip-type.enum';
+
+export enum FirstInvoiceMode {
+  FIXED = 'fixed',
+  ANNIVERSARY = 'anniversary',
+}
 
 export class PersonalInformationDto {
   @ApiProperty({ example: 'Aung Aung' })
@@ -165,6 +171,27 @@ export class NetworkTechnicalDto {
 }
 
 export class BillingInformationDto {
+  @ApiPropertyOptional({ enum: FirstInvoiceMode, default: FirstInvoiceMode.ANNIVERSARY })
+  @IsOptional()
+  @IsEnum(FirstInvoiceMode)
+  firstInvoiceMode?: FirstInvoiceMode;
+
+  @ApiPropertyOptional({ example: 1, minimum: 1, maximum: 31 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(31)
+  fixedStartDay?: number;
+
+  @ApiPropertyOptional({ example: 15, minimum: 1, maximum: 31 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(1)
+  @Max(31)
+  fixedDueDay?: number;
+
   @ApiPropertyOptional({ enum: BillingCycle, default: BillingCycle.MONTHLY })
   @IsOptional()
   @IsEnum(BillingCycle)

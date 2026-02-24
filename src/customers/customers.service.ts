@@ -11,7 +11,7 @@ import { Plan } from '../plans/entities/plan.entity';
 import { SubscriptionNetwork } from '../subscription-networks/entities/subscription-network.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { CreateCustomerDetailsDto } from './dto/create-customer-details.dto';
-import { CustomerIntakeDto } from './dto/customer-intake.dto';
+import { CustomerIntakeDto, FirstInvoiceMode } from './dto/customer-intake.dto';
 import { UpdateCustomerDetailsDto } from './dto/update-customer-details.dto';
 import { Customer } from './entities/customer.entity';
 
@@ -190,6 +190,25 @@ export class CustomersService {
     return `cust${nextNumber.toString().padStart(6, '0')}`;
   }
 
+
+  async generateInvoiceNo(): Promise<string> {
+    const latest = await this.billsRepository
+      .createQueryBuilder('bill')
+      .select('bill.invoiceNo', 'invoiceNo')
+      .where('bill.invoiceNo LIKE :prefix', { prefix: 'INV-%' })
+      .orderBy('bill.invoiceNo', 'DESC')
+      .limit(1)
+      .getRawOne<{ invoiceNo?: string }>();
+
+    const lastCode = latest?.invoiceNo;
+    const lastNumber = lastCode
+      ? Number.parseInt(lastCode.replace('INV-', ''), 10)
+      : 0;
+    const nextNumber = Number.isNaN(lastNumber) ? 1 : lastNumber + 1;
+
+    return `INV-${nextNumber.toString().padStart(6, '0')}`;
+  }
+
   async createCustomerFromIntake(
     dto: CustomerIntakeDto,
     customerCode: string,
@@ -205,7 +224,7 @@ export class CustomersService {
     const customer = this.customersRepository.create({
       customerCode,
       customerType: dto.customerType,
-      status: dto.userStatus ?? CustomerStatus.ENABLE,
+      status: CustomerStatus.PENDING,
       primaryPhone: dto.contactInformation.primaryPhone,
       secondaryPhone: dto.contactInformation.secondaryPhone ?? null,
       contactEmail: dto.contactInformation.email ?? null,
@@ -303,35 +322,167 @@ export class CustomersService {
       return null;
     }
 
-    const monthlyFee = dto.billingInformation.monthlySubscriptionFee ?? 0;
+    const monthlyFeeBase = dto.billingInformation.monthlySubscriptionFee ?? 0;
     const installationFee = dto.billingInformation.installationFee ?? 0;
     const additionalFees = dto.billingInformation.additionalFees ?? 0;
     const discountAmount = dto.billingInformation.discountAmount ?? 0;
 
-    const totalAmount =
-      monthlyFee + installationFee + additionalFees - discountAmount;
+    const today = new Date();
+    const fallbackDate = today.toISOString().slice(0, 10);
+    const baseDate = this.parseDateOnly(
+      dto.services.serviceStartDate ?? dto.services.installationDate ?? fallbackDate,
+    );
+
+    const firstInvoiceMode =
+      dto.billingInformation.firstInvoiceMode ?? FirstInvoiceMode.ANNIVERSARY;
+
+    let billingPeriodStartDate = new Date(baseDate);
+    let billingPeriodEndDate: Date;
+    let dueDateValue: Date;
+    let monthlyFee = monthlyFeeBase;
+
+    if (firstInvoiceMode === FirstInvoiceMode.FIXED) {
+      const fixedStartDay = dto.billingInformation.fixedStartDay ?? 1;
+      const fixedDueDay =
+        dto.billingInformation.fixedDueDay ?? dto.billingInformation.billingDay ?? 15;
+
+      const nextCycleStart = this.getNextFixedCycleStartDate(baseDate, fixedStartDay);
+      billingPeriodEndDate = this.addDays(nextCycleStart, -1);
+      dueDateValue = this.getNextDayOccurrence(baseDate, fixedDueDay);
+
+      const proratedDays = this.daysBetweenInclusive(
+        billingPeriodStartDate,
+        billingPeriodEndDate,
+      );
+      const monthDays = this.daysInMonth(billingPeriodStartDate);
+      monthlyFee = this.roundTo2((monthlyFeeBase * proratedDays) / monthDays);
+    } else {
+      const billingPeriodStart = dto.services.serviceStartDate ?? this.toDateString(baseDate);
+      const billingPeriodEnd = dto.services.contractStartDate ?? billingPeriodStart;
+      billingPeriodStartDate = this.parseDateOnly(billingPeriodStart);
+      billingPeriodEndDate = this.parseDateOnly(billingPeriodEnd);
+      dueDateValue = this.addDays(baseDate, 7);
+    }
+
+    const subtotalAmount = monthlyFee + installationFee + additionalFees;
+    const plusAmount = 0;
+    const minusAmount = discountAmount;
+    const totalAmount = subtotalAmount + plusAmount - minusAmount;
 
     if (totalAmount < 0) {
       throw new BadRequestException('Total amount cannot be negative');
     }
 
+    const invoiceDate = this.toDateString(baseDate);
+    const billingPeriodStart = this.toDateString(billingPeriodStartDate);
+    const billingPeriodEnd = this.toDateString(billingPeriodEndDate);
+
     const bill = this.billsRepository.create({
       customer,
       subscription,
+      invoiceNo: await this.generateInvoiceNo(),
+      invoiceType: 'auto',
+      invoiceDate,
+      billingPeriodFrom: billingPeriodStart,
+      billingPeriodTo: billingPeriodEnd,
       billingCycle: dto.billingInformation.billingCycle ?? BillingCycle.MONTHLY,
-      billingMonth: dto.services.serviceStartDate?.slice(0, 7) ?? 'unknown',
-      billingDay: dto.billingInformation.billingDay ?? 1,
+      billingMonth: billingPeriodStart.slice(0, 7),
+      billingDay:
+        dto.billingInformation.billingDay ??
+        (firstInvoiceMode === FirstInvoiceMode.FIXED
+          ? dto.billingInformation.fixedDueDay ?? 15
+          : billingPeriodStartDate.getDate()),
       currency: dto.billingInformation.currency ?? 'MMK',
-      monthlyFee: monthlyFee.toString(),
-      installationFee: installationFee.toString(),
-      additionalFees: additionalFees.toString(),
-      discountAmount: discountAmount.toString(),
-      totalAmount: totalAmount.toString(),
+      monthlyFee: monthlyFee.toFixed(2),
+      installationFee: installationFee.toFixed(2),
+      additionalFees: additionalFees.toFixed(2),
+      discountAmount: discountAmount.toFixed(2),
+      subtotalAmount: subtotalAmount.toFixed(2),
+      plusAmount: plusAmount.toFixed(2),
+      minusAmount: minusAmount.toFixed(2),
+      totalAmount: totalAmount.toFixed(2),
       status: 'unpaid',
-      dueDate: null,
+      dueDate: this.toDateString(dueDateValue),
     });
 
     return this.billsRepository.save(bill);
+  }
+
+
+  private toDateString(value: Date): string {
+    return value.toISOString().slice(0, 10);
+  }
+
+  private addDays(value: Date, days: number): Date {
+    const output = new Date(value);
+    output.setDate(output.getDate() + days);
+    return output;
+  }
+
+  private roundTo2(value: number): number {
+    return Number.parseFloat(value.toFixed(2));
+  }
+
+  private parseDateOnly(value: string): Date {
+    const [yearText, monthText, dayText] = value.split('-');
+    const year = Number.parseInt(yearText ?? '', 10);
+    const month = Number.parseInt(monthText ?? '', 10);
+    const day = Number.parseInt(dayText ?? '', 10);
+
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(month) ||
+      !Number.isFinite(day) ||
+      month < 1 ||
+      month > 12 ||
+      day < 1
+    ) {
+      return new Date();
+    }
+
+    return new Date(year, month - 1, day);
+  }
+
+  private getNextFixedCycleStartDate(anchor: Date, startDay: number): Date {
+    const current = this.dateAtDay(anchor.getFullYear(), anchor.getMonth(), startDay);
+    if (current > anchor) {
+      return current;
+    }
+    return this.dateAtDay(anchor.getFullYear(), anchor.getMonth() + 1, startDay);
+  }
+
+  private getNextDayOccurrence(anchor: Date, day: number): Date {
+    const current = this.dateAtDay(anchor.getFullYear(), anchor.getMonth(), day);
+    if (current >= anchor) {
+      return current;
+    }
+    return this.dateAtDay(anchor.getFullYear(), anchor.getMonth() + 1, day);
+  }
+
+  private dateAtDay(year: number, monthIndex: number, day: number): Date {
+    const firstDayOfMonth = new Date(year, monthIndex, 1);
+    const monthDays = new Date(
+      firstDayOfMonth.getFullYear(),
+      firstDayOfMonth.getMonth() + 1,
+      0,
+    ).getDate();
+    const safeDay = Math.min(Math.max(day, 1), monthDays);
+    return new Date(
+      firstDayOfMonth.getFullYear(),
+      firstDayOfMonth.getMonth(),
+      safeDay,
+    );
+  }
+
+  private daysInMonth(date: Date): number {
+    return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+  }
+
+  private daysBetweenInclusive(start: Date, end: Date): number {
+    const startUtc = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+    const endUtc = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+    const diff = Math.floor((endUtc - startUtc) / (1000 * 60 * 60 * 24)) + 1;
+    return diff > 0 ? diff : 1;
   }
 
   private async assertCustomerCodeUnique(

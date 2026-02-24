@@ -111,7 +111,7 @@ export class AuthService {
       username,
       password,
       role: UserRole.CUSTOMER,
-      status: this.mapUserStatus(customer.userStatus),
+      status: UserStatus.INACTIVE,
     });
 
     await this.usersService.attachCustomer(user.id, customerRecord);
@@ -247,7 +247,7 @@ export class AuthService {
   }
 
   private mapUserStatus(status?: string): UserStatus {
-    if (status === 'disable' || status === 'takeoff') {
+    if (status === 'disable' || status === 'takeoff' || status === 'pending') {
       return UserStatus.INACTIVE;
     }
 
