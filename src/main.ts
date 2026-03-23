@@ -11,6 +11,13 @@ async function bootstrap() {
     cors: true,
   });
 
+  const allowedOriginsFromEnv = String(process.env.CORS_ALLOWED_ORIGINS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const staticAllowedOrigins = ['https://billcollection.vercel.app'];
+  const allowedOrigins = new Set([...staticAllowedOrigins, ...allowedOriginsFromEnv]);
+
   app.enableCors({
     origin: (origin, callback) => {
       if (!origin) {
@@ -19,7 +26,7 @@ async function bootstrap() {
       }
 
       const isAllowedLocal = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(origin);
-      const isAllowedProd = origin === 'https://billcollection.vercel.app';
+      const isAllowedProd = allowedOrigins.has(origin);
 
       if (isAllowedLocal || isAllowedProd) {
         callback(null, true);
