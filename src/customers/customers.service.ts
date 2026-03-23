@@ -7,12 +7,13 @@ import { CustomerType } from '../common/enums/customer-type.enum';
 import { IpType } from '../common/enums/ip-type.enum';
 import { UserStatus } from '../common/enums/user-status.enum';
 import { Bill } from '../billing/entities/bill.entity';
+import { BillingService } from '../billing/billing.service';
 import { Plan } from '../plans/entities/plan.entity';
 import { SubscriptionNetwork } from '../subscription-networks/entities/subscription-network.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
 import { CreateCustomerDetailsDto } from './dto/create-customer-details.dto';
 import { CustomerIntakeDto, FirstInvoiceMode } from './dto/customer-intake.dto';
-import { UpdateCustomerDetailsDto } from './dto/update-customer-details.dto';
+import { UpdateCustomerDetailsDto, UpdateCustomerServicesDto } from './dto/update-customer-details.dto';
 import { Customer } from './entities/customer.entity';
 
 @Injectable()
@@ -28,6 +29,7 @@ export class CustomersService {
     private readonly networksRepository: Repository<SubscriptionNetwork>,
     @InjectRepository(Bill)
     private readonly billsRepository: Repository<Bill>,
+    private readonly billingService: BillingService,
   ) {}
 
   async createCustomer(payload: CreateCustomerDetailsDto): Promise<Customer> {
@@ -55,19 +57,30 @@ export class CustomersService {
       throw new NotFoundException('Customer not found');
     }
 
-    const merged = { ...customer, ...payload };
-    if (payload.customerCode && payload.customerCode !== customer.customerCode) {
-      await this.assertCustomerCodeUnique(payload.customerCode, customerId);
+    const { services, ...customerPayload } = payload;
+
+    const merged = { ...customer, ...customerPayload };
+    if (
+      customerPayload.customerCode &&
+      customerPayload.customerCode !== customer.customerCode
+    ) {
+      await this.assertCustomerCodeUnique(customerPayload.customerCode, customerId);
     }
 
     this.validateCustomerTypeRules(merged.customerType, merged);
 
-    this.customersRepository.merge(customer, payload);
+    this.customersRepository.merge(customer, customerPayload);
     const saved = await this.customersRepository.save(customer);
 
-    if (payload.status && customer.user) {
+    const hasServicesPayload =
+      !!services && Object.values(services).some((value) => value !== undefined);
+    if (hasServicesPayload && services) {
+      await this.upsertCustomerSubscription(saved, services);
+    }
+
+    if (customerPayload.status && customer.user) {
       customer.user.status =
-        payload.status === CustomerStatus.ENABLE
+        customerPayload.status === CustomerStatus.ENABLE
           ? UserStatus.ACTIVE
           : UserStatus.INACTIVE;
       await this.customersRepository.manager.save(customer.user);
@@ -76,6 +89,11 @@ export class CustomersService {
     return saved;
   }
 
+  async removeCustomerById(customerId: string): Promise<void> {
+    await this.customersRepository.delete(customerId);
+  }
+
+
   async getAllCustomers(): Promise<
     Array<{
       id: string;
@@ -83,6 +101,8 @@ export class CustomersService {
       customerType: CustomerType;
       status: CustomerStatus;
       collectorCode?: string | null;
+      billingRuleId?: string | null;
+      billingRuleName?: string | null;
       companyName?: string | null;
       personalName?: string | null;
       primaryPhone: string;
@@ -97,6 +117,7 @@ export class CustomersService {
         id: string;
         serviceType: string;
         serviceStartDate?: string | null;
+        contractStartDate?: string | null;
         contractEndDate?: string | null;
         ipType: IpType;
         staticIpAddress?: string | null;
@@ -134,6 +155,8 @@ export class CustomersService {
         customerType: customer.customerType,
         status: customer.status,
         collectorCode: customer.collectorCode ?? null,
+        billingRuleId: customer.billingRuleId ?? null,
+        billingRuleName: customer.billingRuleName ?? null,
         companyName: customer.companyName ?? null,
         personalName: customer.personalName ?? null,
         primaryPhone: customer.primaryPhone,
@@ -151,12 +174,13 @@ export class CustomersService {
             : null,
         subscription: latestSubscription
           ? {
-              id: latestSubscription.id,
-              serviceType: latestSubscription.serviceType,
-              serviceStartDate: latestSubscription.serviceStartDate ?? null,
-              contractEndDate: latestSubscription.contractEndDate ?? null,
-              ipType: latestSubscription.ipType,
-              staticIpAddress: latestSubscription.staticIpAddress ?? null,
+            id: latestSubscription.id,
+            serviceType: latestSubscription.serviceType,
+            serviceStartDate: latestSubscription.serviceStartDate ?? null,
+            contractStartDate: latestSubscription.contractStartDate ?? null,
+            contractEndDate: latestSubscription.contractEndDate ?? null,
+            ipType: latestSubscription.ipType,
+            staticIpAddress: latestSubscription.staticIpAddress ?? null,
               plan: latestSubscription.plan
                 ? {
                     id: latestSubscription.plan.id,
@@ -191,23 +215,33 @@ export class CustomersService {
   }
 
 
-  async generateInvoiceNo(): Promise<string> {
+
+  async generateInvoiceNo(referenceDate: Date = new Date()): Promise<string> {
+    const month = String(referenceDate.getMonth() + 1).padStart(2, '0');
+    const year = String(referenceDate.getFullYear()).slice(-2);
+    const prefixCore = `${month}${year}`;
+    const prefixed = `INV-${prefixCore}`;
+
     const latest = await this.billsRepository
       .createQueryBuilder('bill')
       .select('bill.invoiceNo', 'invoiceNo')
-      .where('bill.invoiceNo LIKE :prefix', { prefix: 'INV-%' })
+      .where('bill.invoiceNo LIKE :prefixed', { prefixed: `${prefixed}%` })
+      .orWhere('bill.invoiceNo LIKE :legacy', { legacy: `${prefixCore}%` })
       .orderBy('bill.invoiceNo', 'DESC')
       .limit(1)
       .getRawOne<{ invoiceNo?: string }>();
 
-    const lastCode = latest?.invoiceNo;
-    const lastNumber = lastCode
-      ? Number.parseInt(lastCode.replace('INV-', ''), 10)
-      : 0;
+    const lastCode = (latest?.invoiceNo ?? '').trim();
+    const normalized = lastCode.toUpperCase().startsWith('INV-')
+      ? lastCode.slice(4)
+      : lastCode;
+    const matched = normalized.match(/^(\d{4})(\d+)$/);
+    const lastNumber = matched?.[1] === prefixCore ? Number.parseInt(matched[2], 10) : 0;
     const nextNumber = Number.isNaN(lastNumber) ? 1 : lastNumber + 1;
 
-    return `INV-${nextNumber.toString().padStart(6, '0')}`;
+    return `${prefixed}${nextNumber.toString().padStart(4, '0')}`;
   }
+
 
   async createCustomerFromIntake(
     dto: CustomerIntakeDto,
@@ -242,6 +276,12 @@ export class CustomersService {
       authorizedContactPerson:
         dto.businessInformation?.authorizedContactPerson ?? null,
       contactNrc: dto.businessInformation?.contactNrc ?? null,
+      defaultInstallationFee: this.roundTo2(
+        this.toNumber(dto.billingInformation?.installationFee ?? 0),
+      ).toFixed(2),
+      defaultAdditionalFees: this.roundTo2(
+        this.toNumber(dto.billingInformation?.additionalFees ?? 0),
+      ).toFixed(2),
     });
 
     return this.customersRepository.save(customer);
@@ -326,6 +366,14 @@ export class CustomersService {
     const installationFee = dto.billingInformation.installationFee ?? 0;
     const additionalFees = dto.billingInformation.additionalFees ?? 0;
     const discountAmount = dto.billingInformation.discountAmount ?? 0;
+    const rawCustomMonths = Number.parseInt(
+      String(dto.billingInformation.customBillingMonths ?? ''),
+      10,
+    );
+    const customBillingMonths =
+      Number.isFinite(rawCustomMonths) && rawCustomMonths > 0
+        ? rawCustomMonths
+        : null;
 
     const today = new Date();
     const fallbackDate = today.toISOString().slice(0, 10);
@@ -386,12 +434,17 @@ export class CustomersService {
       billingPeriodFrom: billingPeriodStart,
       billingPeriodTo: billingPeriodEnd,
       billingCycle: dto.billingInformation.billingCycle ?? BillingCycle.MONTHLY,
+      customBillingMonths:
+        dto.billingInformation.billingCycle === BillingCycle.CUSTOM
+          ? customBillingMonths
+          : null,
       billingMonth: billingPeriodStart.slice(0, 7),
       billingDay:
         dto.billingInformation.billingDay ??
         (firstInvoiceMode === FirstInvoiceMode.FIXED
           ? dto.billingInformation.fixedDueDay ?? 15
           : billingPeriodStartDate.getDate()),
+      dueAfterDays: 7,
       currency: dto.billingInformation.currency ?? 'MMK',
       monthlyFee: monthlyFee.toFixed(2),
       installationFee: installationFee.toFixed(2),
@@ -405,7 +458,116 @@ export class CustomersService {
       dueDate: this.toDateString(dueDateValue),
     });
 
-    return this.billsRepository.save(bill);
+    const savedBill = await this.billsRepository.save(bill);
+
+    await this.billingService.applyAutomaticAdjustmentsToInvoice(savedBill.id);
+
+    return savedBill;
+  }
+
+
+  private async upsertCustomerSubscription(
+    customer: Customer,
+    services: UpdateCustomerServicesDto,
+  ) {
+    const requestedPlanCode = this.normalizeOptionalString(
+      services.serviceId ?? services.planCode,
+    );
+
+    let latestSubscription = await this.subscriptionsRepository.findOne({
+      where: { customer: { id: customer.id } },
+      relations: { plan: true },
+      order: { createdAt: 'DESC' },
+    });
+
+    let targetPlan = latestSubscription?.plan ?? null;
+
+    if (requestedPlanCode) {
+      targetPlan = await this.plansRepository.findOne({
+        where: { planCode: requestedPlanCode },
+      });
+
+      if (!targetPlan) {
+        throw new BadRequestException(
+          `Plan not found for code: ${requestedPlanCode}`,
+        );
+      }
+    }
+
+    if (!latestSubscription) {
+      if (!targetPlan) {
+        throw new BadRequestException(
+          'serviceId or planCode is required to create a subscription',
+        );
+      }
+
+      const serviceType = this.normalizeOptionalString(services.serviceType);
+      if (!serviceType) {
+        throw new BadRequestException(
+          'serviceType is required to create a subscription',
+        );
+      }
+
+      latestSubscription = this.subscriptionsRepository.create({
+        customer,
+        plan: targetPlan,
+        serviceType,
+        serviceStartDate: services.serviceStartDate ?? null,
+        contractStartDate: services.contractStartDate ?? null,
+        contractEndDate: services.contractEndDate ?? null,
+        installationDate: services.installationDate ?? null,
+        ipType: services.ipType ?? IpType.DYNAMIC,
+        staticIpAddress:
+          this.normalizeOptionalString(services.staticIpAddress) ?? null,
+      });
+    } else {
+      if (targetPlan) {
+        latestSubscription.plan = targetPlan;
+      }
+
+      const serviceType = this.normalizeOptionalString(services.serviceType);
+      if (serviceType) {
+        latestSubscription.serviceType = serviceType;
+      }
+
+      if (services.serviceStartDate !== undefined) {
+        latestSubscription.serviceStartDate = services.serviceStartDate ?? null;
+      }
+      if (services.contractStartDate !== undefined) {
+        latestSubscription.contractStartDate =
+          services.contractStartDate ?? null;
+      }
+      if (services.contractEndDate !== undefined) {
+        latestSubscription.contractEndDate = services.contractEndDate ?? null;
+      }
+      if (services.installationDate !== undefined) {
+        latestSubscription.installationDate = services.installationDate ?? null;
+      }
+      if (services.ipType !== undefined) {
+        latestSubscription.ipType = services.ipType;
+      }
+      if (services.staticIpAddress !== undefined) {
+        latestSubscription.staticIpAddress =
+          this.normalizeOptionalString(services.staticIpAddress) ?? null;
+      }
+    }
+
+    if (
+      latestSubscription.ipType === IpType.STATIC &&
+      !latestSubscription.staticIpAddress
+    ) {
+      throw new BadRequestException('Static IP address is required');
+    }
+
+    await this.subscriptionsRepository.save(latestSubscription);
+  }
+
+  private normalizeOptionalString(value?: string | null): string | undefined {
+    if (typeof value !== 'string') {
+      return undefined;
+    }
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : undefined;
   }
 
 
@@ -421,6 +583,15 @@ export class CustomersService {
 
   private roundTo2(value: number): number {
     return Number.parseFloat(value.toFixed(2));
+  }
+
+  private toNumber(value: string | number | null | undefined): number {
+    if (value === null || value === undefined || value === '') {
+      return 0;
+    }
+
+    const parsed = typeof value === 'number' ? value : Number.parseFloat(String(value));
+    return Number.isFinite(parsed) ? parsed : 0;
   }
 
   private parseDateOnly(value: string): Date {

@@ -7,14 +7,18 @@ import { BillingController } from './billing.controller';
 import { BillingService } from './billing.service';
 import { BillAdjustment } from './entities/bill-adjustment.entity';
 import { Bill } from './entities/bill.entity';
+import { BillingRule } from './entities/billing-rule.entity';
 import { CustomerRecurringAdjustment } from './entities/customer-recurring-adjustment.entity';
+import { GlobalInvoiceAdjustment } from './entities/global-invoice-adjustment.entity';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([
       Bill,
       BillAdjustment,
+      BillingRule,
       CustomerRecurringAdjustment,
+      GlobalInvoiceAdjustment,
       Customer,
       Subscription,
       User,

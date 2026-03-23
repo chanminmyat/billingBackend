@@ -124,6 +124,10 @@ export class UsersService {
     await this.usersRepository.update(userId, { passwordHash });
   }
 
+  async removeUserById(userId: string): Promise<void> {
+    await this.usersRepository.delete(userId);
+  }
+
   async attachCustomer(userId: string, customer: Customer): Promise<User> {
     const user = await this.findEntityByIdOrFail(userId);
     user.customer = customer;

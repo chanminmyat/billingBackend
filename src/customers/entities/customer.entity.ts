@@ -52,6 +52,18 @@ export class Customer {
   collectorCode?: string | null;
 
   @Column({ nullable: true })
+  billingRuleId?: string | null;
+
+  @Column({ nullable: true })
+  billingRuleName?: string | null;
+
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
+  defaultInstallationFee: string;
+
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
+  defaultAdditionalFees: string;
+
+  @Column({ nullable: true })
   personalName?: string | null;
 
   @Column({ nullable: true })

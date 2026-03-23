@@ -12,6 +12,33 @@ import { Customer } from '../../customers/entities/customer.entity';
 import { Subscription } from '../../subscriptions/entities/subscription.entity';
 import { BillAdjustment } from './bill-adjustment.entity';
 
+export type InvoiceCollectionStatus =
+  | 'idle'
+  | 'en_route'
+  | 'arrived'
+  | 'rescheduled'
+  | 'office_transfer'
+  | 'collected_pending_admin'
+  | 'completed';
+
+export type InvoiceCollectionEventType =
+  | 'en_route'
+  | 'arrived'
+  | 'rescheduled'
+  | 'office_transfer'
+  | 'collector_collected'
+  | 'admin_confirmed';
+
+export type InvoiceCollectionEvent = {
+  id: string;
+  type: InvoiceCollectionEventType;
+  label: string;
+  note?: string;
+  timestamp: string;
+  actorName?: string;
+  actorRole?: string;
+};
+
 @Entity({ name: 'bills' })
 export class Bill {
   @PrimaryGeneratedColumn('uuid')
@@ -48,11 +75,23 @@ export class Bill {
   @Column({ type: 'enum', enum: BillingCycle, default: BillingCycle.MONTHLY })
   billingCycle: BillingCycle;
 
+  @Column({ type: 'int', nullable: true })
+  customBillingMonths?: number | null;
+
   @Column()
   billingMonth: string;
 
   @Column({ default: 1 })
   billingDay: number;
+
+  @Column({ default: 7 })
+  dueAfterDays: number;
+
+  @Column({ nullable: true })
+  billingRuleId?: string | null;
+
+  @Column({ nullable: true })
+  billingRuleName?: string | null;
 
   @Column({ default: 'MMK' })
   currency: string;
@@ -83,6 +122,15 @@ export class Bill {
 
   @Column({ default: 'unpaid' })
   status: string;
+
+  @Column({ type: 'varchar', default: 'idle' })
+  collectionStatus: InvoiceCollectionStatus;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  collectionUpdatedAt?: Date | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  collectionEvents?: InvoiceCollectionEvent[] | null;
 
   @Column({ nullable: true })
   paymentMethod?: string | null;

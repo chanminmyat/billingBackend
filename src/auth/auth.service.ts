@@ -94,43 +94,70 @@ export class AuthService {
       throw new BadRequestException('Customer details are required');
     }
 
-    const customerCode = await this.customersService.generateCustomerCode();
-    const customerRecord = await this.customersService.createCustomerFromIntake(
-      customer,
-      customerCode,
-    );
+    let createdCustomerId: string | null = null;
+    let createdUserId: string | null = null;
 
-    const { email, name, nrc } = this.extractUserCredentials(customer);
-    const username = customerCode;
-    const password = nrc;
+    try {
+      const customerCode = await this.customersService.generateCustomerCode();
+      const customerRecord = await this.customersService.createCustomerFromIntake(
+        customer,
+        customerCode,
+      );
+      createdCustomerId = customerRecord.id;
 
-    const user = await this.usersService.createUser({
-      name,
-      email,
-      phone: customer.contactInformation.primaryPhone,
-      username,
-      password,
-      role: UserRole.CUSTOMER,
-      status: UserStatus.INACTIVE,
-    });
+      const { email, name, nrc } = this.extractUserCredentials(customer);
+      const username = customerCode;
+      const password = nrc;
 
-    await this.usersService.attachCustomer(user.id, customerRecord);
+      const user = await this.usersService.createUser({
+        name,
+        email,
+        phone: customer.contactInformation.primaryPhone,
+        username,
+        password,
+        role: UserRole.CUSTOMER,
+        status: UserStatus.INACTIVE,
+      });
+      createdUserId = user.id;
 
-    const plan = await this.customersService.createPlanFromIntake(customer);
-    const subscription = await this.customersService.createSubscriptionFromIntake(
-      customerRecord,
-      plan,
-      customer,
-    );
+      await this.usersService.attachCustomer(user.id, customerRecord);
 
-    await this.customersService.createNetworkFromIntake(subscription, customer);
-    await this.customersService.createBillFromIntake(
-      customerRecord,
-      subscription,
-      customer,
-    );
+      const plan = await this.customersService.createPlanFromIntake(customer);
+      const subscription = await this.customersService.createSubscriptionFromIntake(
+        customerRecord,
+        plan,
+        customer,
+      );
 
-    return this.usersService.buildPublicProfile(user.id);
+      await this.customersService.createNetworkFromIntake(subscription, customer);
+
+      const shouldCreateInitialInvoice = customer.createInvoiceNow !== false;
+      if (shouldCreateInitialInvoice) {
+        await this.customersService.createBillFromIntake(
+          customerRecord,
+          subscription,
+          customer,
+        );
+      }
+
+      return this.usersService.buildPublicProfile(user.id);
+    } catch (error) {
+      if (createdUserId) {
+        try {
+          await this.usersService.removeUserById(createdUserId);
+        } catch {
+          // Best effort rollback.
+        }
+      }
+      if (createdCustomerId) {
+        try {
+          await this.customersService.removeCustomerById(createdCustomerId);
+        } catch {
+          // Best effort rollback.
+        }
+      }
+      throw error;
+    }
   }
 
   async requestPasswordReset(dto: ForgotPasswordDto) {

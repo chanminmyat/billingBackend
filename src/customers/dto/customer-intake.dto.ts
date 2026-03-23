@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsDateString,
   IsEmail,
   IsEnum,
@@ -254,6 +255,15 @@ export class BillingInformationDto {
 }
 
 export class CustomerIntakeDto {
+  @ApiPropertyOptional({
+    example: true,
+    description: 'If false, customer will be created without initial invoice',
+  })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  createInvoiceNow?: boolean;
+
   @ApiProperty({ enum: CustomerType })
   @IsEnum(CustomerType)
   customerType: CustomerType;

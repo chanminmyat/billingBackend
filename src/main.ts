@@ -12,7 +12,22 @@ async function bootstrap() {
   });
 
   app.enableCors({
-    origin: ['http://localhost:3000', 'https://billcollection.vercel.app'],
+    origin: (origin, callback) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const isAllowedLocal = /^http:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(origin);
+      const isAllowedProd = origin === 'https://billcollection.vercel.app';
+
+      if (isAllowedLocal || isAllowedProd) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error('Not allowed by CORS'));
+    },
     credentials: true,
   });
 
@@ -44,6 +59,6 @@ async function bootstrap() {
   });
 
   const port = process.env.PORT || 4000;
-  await app.listen(port, '0.0.0.0');
+  await app.listen(port);
 }
 bootstrap();
