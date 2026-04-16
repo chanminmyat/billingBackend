@@ -63,6 +63,12 @@ export class Customer {
   @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
   defaultAdditionalFees: string;
 
+  @Column({ type: 'boolean', default: true })
+  collectionServiceEnabled: boolean;
+
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
+  collectionFee: string;
+
   @Column({ nullable: true })
   personalName?: string | null;
 

@@ -19,6 +19,7 @@ import {
   AssignBillingRuleInvoicesDto,
 } from './dto/assign-billing-rule.dto';
 import { CreateBillingRuleDto } from './dto/create-billing-rule.dto';
+import { CreatePaymentAccountDto } from './dto/create-payment-account.dto';
 import { UpdateBillingRuleDto } from './dto/update-billing-rule.dto';
 import {
   GlobalInvoiceAdjustmentInputDto,
@@ -37,6 +38,7 @@ import { Bill, InvoiceCollectionEvent } from './entities/bill.entity';
 import { BillingRule } from './entities/billing-rule.entity';
 import { CustomerRecurringAdjustment } from './entities/customer-recurring-adjustment.entity';
 import { GlobalInvoiceAdjustment } from './entities/global-invoice-adjustment.entity';
+import { PaymentAccount, PaymentAccountKind } from './entities/payment-account.entity';
 
 @Injectable()
 export class BillingService {
@@ -51,6 +53,8 @@ export class BillingService {
     private readonly recurringAdjustmentsRepository: Repository<CustomerRecurringAdjustment>,
     @InjectRepository(GlobalInvoiceAdjustment)
     private readonly globalAdjustmentsRepository: Repository<GlobalInvoiceAdjustment>,
+    @InjectRepository(PaymentAccount)
+    private readonly paymentAccountsRepository: Repository<PaymentAccount>,
     @InjectRepository(Customer)
     private readonly customersRepository: Repository<Customer>,
     @InjectRepository(Subscription)
@@ -58,6 +62,58 @@ export class BillingService {
     @InjectRepository(User)
     private readonly usersRepository: Repository<User>,
   ) {}
+
+  async getPaymentAccounts(activeOnly = false) {
+    return this.paymentAccountsRepository.find({
+      where: activeOnly ? { isActive: true } : undefined,
+      order: {
+        isActive: 'DESC',
+        createdAt: 'DESC',
+      },
+    });
+  }
+
+  async createPaymentAccount(dto: CreatePaymentAccountDto) {
+    const kind = dto.kind;
+    const accountName = dto.accountName?.trim();
+    const accountNumber = dto.accountNumber?.trim();
+    const walletType = dto.walletType?.trim();
+    const bankType = dto.bankType?.trim();
+    const qrCodeDataUrl = dto.qrCodeDataUrl?.trim();
+
+    if (!accountName) {
+      throw new BadRequestException('Account name is required');
+    }
+
+    if (!accountNumber) {
+      throw new BadRequestException('Account number is required');
+    }
+
+    if (kind === PaymentAccountKind.WALLET) {
+      if (!walletType) {
+        throw new BadRequestException('Wallet type is required');
+      }
+      if (!qrCodeDataUrl) {
+        throw new BadRequestException('QR code is required for wallet');
+      }
+    }
+
+    if (kind === PaymentAccountKind.ACCOUNT && !bankType) {
+      throw new BadRequestException('Bank type is required');
+    }
+
+    const account = this.paymentAccountsRepository.create({
+      kind,
+      walletType: kind === PaymentAccountKind.WALLET ? walletType ?? null : null,
+      bankType: kind === PaymentAccountKind.ACCOUNT ? bankType ?? null : null,
+      accountName,
+      accountNumber,
+      qrCodeDataUrl: kind === PaymentAccountKind.WALLET ? qrCodeDataUrl ?? null : null,
+      isActive: dto.isActive ?? true,
+    });
+
+    return this.paymentAccountsRepository.save(account);
+  }
 
   async getBillingRules() {
     return this.billingRulesRepository.find({
@@ -534,6 +590,46 @@ export class BillingService {
       where: { customer: { id: customerId }, status: Not('cancelled') },
       order: { issuedAt: 'DESC' },
     });
+    const isManualOneTime = options?.manualOneTime === true;
+    const now = new Date();
+    const invoiceDateText = this.toDateString(now);
+
+    if (isManualOneTime) {
+      const resolvedDueAfterDays = this.resolveDueAfterDays(options?.dueAfterDays, 7);
+      const invoice = this.billsRepository.create({
+        customer,
+        subscription: latestSubscription,
+        invoiceNo: await this.generateInvoiceNo(now),
+        invoiceType: 'manual_one_time',
+        invoiceDate: invoiceDateText,
+        billingPeriodFrom: invoiceDateText,
+        billingPeriodTo: invoiceDateText,
+        billingCycle: BillingCycle.CUSTOM,
+        customBillingMonths: 1,
+        billingMonth: invoiceDateText.slice(0, 7),
+        billingDay: now.getDate(),
+        dueAfterDays: resolvedDueAfterDays,
+        billingRuleId: null,
+        billingRuleName: null,
+        currency: latestSubscription.plan.currency ?? 'MMK',
+        monthlyFee: '0.00',
+        installationFee: '0.00',
+        additionalFees: '0.00',
+        discountAmount: '0.00',
+        subtotalAmount: '0.00',
+        plusAmount: '0.00',
+        minusAmount: '0.00',
+        totalAmount: '0.00',
+        status: 'unpaid',
+        collectionStatus: 'idle',
+        collectionEvents: [],
+        collectionUpdatedAt: null,
+        dueDate: this.toDateString(this.addDays(now, resolvedDueAfterDays)),
+      });
+
+      const savedManualInvoice = await this.billsRepository.save(invoice);
+      return this.getInvoiceById(savedManualInvoice.id);
+    }
 
     const requestedRuleId = (
       options?.billingRuleId?.trim() ||
@@ -557,7 +653,6 @@ export class BillingService {
           ? 'fixed'
           : 'anniversary';
 
-    const now = new Date();
     const billingAnchorDate =
       this.parseDateOnly(latestSubscription.contractStartDate) ??
       this.parseDateOnly(latestSubscription.serviceStartDate) ??
@@ -598,7 +693,6 @@ export class BillingService {
       latestInvoice?.dueAfterDays ?? assignedRule?.dueAfterDays ?? undefined,
     );
 
-    const invoiceDateText = this.toDateString(now);
     const monthlyFee = this.toNumber(latestSubscription.plan.monthlyFee);
     const cycleMonths = this.getCycleMonths(resolvedCycle, resolvedCustomMonths);
     const isFirstInvoice = !latestInvoice;
@@ -613,9 +707,13 @@ export class BillingService {
     const installationFee = isFirstInvoice
       ? this.roundTo2(this.toNumber(customer.defaultInstallationFee))
       : 0;
-    const additionalFees = isFirstInvoice
-      ? this.roundTo2(this.toNumber(customer.defaultAdditionalFees))
+    const recurringCollectionFee = customer.collectionServiceEnabled
+      ? this.roundTo2(this.toNumber(customer.collectionFee))
       : 0;
+    const additionalFees = this.roundTo2(
+      (isFirstInvoice ? this.toNumber(customer.defaultAdditionalFees) : 0) +
+        recurringCollectionFee,
+    );
     const subtotalAmount = this.roundTo2(cycleFee + installationFee + additionalFees);
 
     const invoice = this.billsRepository.create({

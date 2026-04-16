@@ -11,6 +11,7 @@ import { BillingService } from '../billing/billing.service';
 import { Plan } from '../plans/entities/plan.entity';
 import { SubscriptionNetwork } from '../subscription-networks/entities/subscription-network.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
+import { User } from '../users/entities/user.entity';
 import { CreateCustomerDetailsDto } from './dto/create-customer-details.dto';
 import { CustomerIntakeDto, FirstInvoiceMode } from './dto/customer-intake.dto';
 import { UpdateCustomerDetailsDto, UpdateCustomerServicesDto } from './dto/update-customer-details.dto';
@@ -36,9 +37,16 @@ export class CustomersService {
     await this.assertCustomerCodeUnique(payload.customerCode);
     this.validateCustomerTypeRules(payload.customerType, payload);
 
+    const { collectionFee, ...restPayload } = payload;
+    const normalizedCollectionFee =
+      collectionFee === undefined
+        ? undefined
+        : this.roundTo2(Math.max(0, this.toNumber(collectionFee))).toFixed(2);
+
     const customer = this.customersRepository.create({
-      ...payload,
+      ...restPayload,
       status: payload.status ?? undefined,
+      collectionFee: normalizedCollectionFee,
     });
 
     return this.customersRepository.save(customer);
@@ -58,18 +66,69 @@ export class CustomersService {
     }
 
     const { services, ...customerPayload } = payload;
+    const normalizedCustomerPayload: Record<string, unknown> = {
+      ...customerPayload,
+    };
 
-    const merged = { ...customer, ...customerPayload };
-    if (
-      customerPayload.customerCode &&
-      customerPayload.customerCode !== customer.customerCode
-    ) {
-      await this.assertCustomerCodeUnique(customerPayload.customerCode, customerId);
+    if (normalizedCustomerPayload.collectionFee !== undefined) {
+      normalizedCustomerPayload.collectionFee = this.roundTo2(
+        Math.max(0, this.toNumber(normalizedCustomerPayload.collectionFee as string | number)),
+      ).toFixed(2);
     }
 
-    this.validateCustomerTypeRules(merged.customerType, merged);
+    if (normalizedCustomerPayload.collectionServiceEnabled === false) {
+      normalizedCustomerPayload.collectionFee = '0.00';
+      normalizedCustomerPayload.collectorCode = null;
+    }
+    const nextPrimaryPhone =
+      normalizedCustomerPayload.primaryPhone !== undefined
+        ? String(normalizedCustomerPayload.primaryPhone).trim()
+        : '';
+    const nextContactEmail =
+      normalizedCustomerPayload.contactEmail !== undefined
+        ? String(normalizedCustomerPayload.contactEmail).trim().toLowerCase()
+        : '';
+    const hasPrimaryPhoneUpdate = nextPrimaryPhone.length > 0;
+    const hasContactEmailUpdate = nextContactEmail.length > 0;
+    const usersRepository = this.customersRepository.manager.getRepository(User);
 
-    this.customersRepository.merge(customer, customerPayload);
+    const merged = { ...customer, ...normalizedCustomerPayload };
+    if (
+      normalizedCustomerPayload.customerCode &&
+      normalizedCustomerPayload.customerCode !== customer.customerCode
+    ) {
+      await this.assertCustomerCodeUnique(
+        String(normalizedCustomerPayload.customerCode),
+        customerId,
+      );
+    }
+
+    this.validateCustomerTypeRules(
+      (merged.customerType as CustomerType) ?? customer.customerType,
+      merged as unknown as Partial<CreateCustomerDetailsDto>,
+    );
+
+    if (customer.user) {
+      if (hasPrimaryPhoneUpdate && nextPrimaryPhone !== customer.user.phone) {
+        const existingPhoneUser = await usersRepository.findOne({
+          where: { phone: nextPrimaryPhone },
+        });
+        if (existingPhoneUser && existingPhoneUser.id !== customer.user.id) {
+          throw new BadRequestException('Phone already exists');
+        }
+      }
+
+      if (hasContactEmailUpdate && nextContactEmail !== customer.user.email) {
+        const existingEmailUser = await usersRepository.findOne({
+          where: { email: nextContactEmail },
+        });
+        if (existingEmailUser && existingEmailUser.id !== customer.user.id) {
+          throw new BadRequestException('Email already exists');
+        }
+      }
+    }
+
+    this.customersRepository.merge(customer, normalizedCustomerPayload as Partial<Customer>);
     const saved = await this.customersRepository.save(customer);
 
     const hasServicesPayload =
@@ -78,11 +137,20 @@ export class CustomersService {
       await this.upsertCustomerSubscription(saved, services);
     }
 
-    if (customerPayload.status && customer.user) {
+    if (normalizedCustomerPayload.status && customer.user) {
       customer.user.status =
-        customerPayload.status === CustomerStatus.ENABLE
+        normalizedCustomerPayload.status === CustomerStatus.ENABLE
           ? UserStatus.ACTIVE
           : UserStatus.INACTIVE;
+    }
+
+    if (customer.user) {
+      if (hasPrimaryPhoneUpdate) {
+        customer.user.phone = nextPrimaryPhone;
+      }
+      if (hasContactEmailUpdate) {
+        customer.user.email = nextContactEmail;
+      }
       await this.customersRepository.manager.save(customer.user);
     }
 
@@ -103,11 +171,15 @@ export class CustomersService {
       collectorCode?: string | null;
       billingRuleId?: string | null;
       billingRuleName?: string | null;
+      collectionServiceEnabled: boolean;
+      collectionFee: string;
       companyName?: string | null;
       personalName?: string | null;
       primaryPhone: string;
       contactEmail?: string | null;
       installationAddress?: string | null;
+      installationMapLink?: string | null;
+      billingMapLink?: string | null;
       createdAt: Date;
       contactPerson?: {
         name: string;
@@ -157,11 +229,15 @@ export class CustomersService {
         collectorCode: customer.collectorCode ?? null,
         billingRuleId: customer.billingRuleId ?? null,
         billingRuleName: customer.billingRuleName ?? null,
+        collectionServiceEnabled: customer.collectionServiceEnabled ?? true,
+        collectionFee: customer.collectionFee ?? '0.00',
         companyName: customer.companyName ?? null,
         personalName: customer.personalName ?? null,
         primaryPhone: customer.primaryPhone,
         contactEmail: customer.contactEmail ?? null,
         installationAddress: customer.installationAddress ?? null,
+        installationMapLink: customer.installationMapLink ?? null,
+        billingMapLink: customer.billingMapLink ?? null,
         createdAt: customer.createdAt,
         contactPerson:
           customer.customerType === CustomerType.BUSINESS &&
@@ -255,6 +331,13 @@ export class CustomersService {
       contactNrc: dto.businessInformation?.contactNrc ?? null,
     } as CreateCustomerDetailsDto);
 
+    const collectionServiceEnabled = this.normalizeCollectionService(
+      dto.billingInformation?.collectionService,
+    );
+    const collectionFee = collectionServiceEnabled
+      ? this.roundTo2(this.toNumber(dto.billingInformation?.collectionFee ?? 0))
+      : 0;
+
     const customer = this.customersRepository.create({
       customerCode,
       customerType: dto.customerType,
@@ -282,6 +365,8 @@ export class CustomersService {
       defaultAdditionalFees: this.roundTo2(
         this.toNumber(dto.billingInformation?.additionalFees ?? 0),
       ).toFixed(2),
+      collectionServiceEnabled,
+      collectionFee: collectionFee.toFixed(2),
     });
 
     return this.customersRepository.save(customer);
@@ -364,7 +449,14 @@ export class CustomersService {
 
     const monthlyFeeBase = dto.billingInformation.monthlySubscriptionFee ?? 0;
     const installationFee = dto.billingInformation.installationFee ?? 0;
-    const additionalFees = dto.billingInformation.additionalFees ?? 0;
+    const baseAdditionalFees = dto.billingInformation.additionalFees ?? 0;
+    const collectionServiceEnabled = this.normalizeCollectionService(
+      dto.billingInformation.collectionService,
+    );
+    const collectionFee = collectionServiceEnabled
+      ? this.toNumber(dto.billingInformation.collectionFee ?? 0)
+      : 0;
+    const additionalFees = baseAdditionalFees + collectionFee;
     const discountAmount = dto.billingInformation.discountAmount ?? 0;
     const rawCustomMonths = Number.parseInt(
       String(dto.billingInformation.customBillingMonths ?? ''),
@@ -571,6 +663,32 @@ export class CustomersService {
   }
 
 
+  private normalizeCollectionService(value: unknown): boolean {
+    if (typeof value === 'boolean') {
+      return value;
+    }
+
+    const normalized = String(value ?? '')
+      .trim()
+      .toLowerCase();
+
+    if (
+      ['no', 'false', '0', 'disable', 'disabled', 'off'].includes(normalized)
+    ) {
+      return false;
+    }
+
+    if (
+      ['yes', 'true', '1', 'enable', 'enabled', 'active', 'on'].includes(
+        normalized,
+      )
+    ) {
+      return true;
+    }
+
+    return true;
+  }
+
   private toDateString(value: Date): string {
     return value.toISOString().slice(0, 10);
   }
@@ -671,7 +789,7 @@ export class CustomersService {
 
   private validateCustomerTypeRules(
     type: CustomerType,
-    payload: Partial<CreateCustomerDetailsDto>,
+    payload: Partial<CreateCustomerDetailsDto> | Record<string, unknown>,
   ) {
     if (type === CustomerType.INDIVIDUAL) {
       if (!payload.personalName || !payload.personalNrc) {

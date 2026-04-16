@@ -15,6 +15,7 @@ import {
   AssignBillingRuleInvoicesDto,
 } from './dto/assign-billing-rule.dto';
 import { CreateBillingRuleDto } from './dto/create-billing-rule.dto';
+import { CreatePaymentAccountDto } from './dto/create-payment-account.dto';
 import { GenerateInvoiceDto } from './dto/generate-invoice.dto';
 import { MarkInvoicePaidDto } from './dto/mark-invoice-paid.dto';
 import { UpdateBillingRuleDto } from './dto/update-billing-rule.dto';
@@ -26,6 +27,19 @@ import { UpdateInvoiceAdjustmentsDto } from './dto/update-invoice-adjustments.dt
 @Controller('billing')
 export class BillingController {
   constructor(private readonly billingService: BillingService) {}
+
+  @Get('payment-accounts')
+  @ApiOperation({ summary: 'Get payment accounts' })
+  getPaymentAccounts(@Query('activeOnly') activeOnly?: string) {
+    const onlyActive = ['1', 'true', 'yes'].includes((activeOnly ?? '').toLowerCase());
+    return this.billingService.getPaymentAccounts(onlyActive);
+  }
+
+  @Post('payment-accounts')
+  @ApiOperation({ summary: 'Create payment account' })
+  createPaymentAccount(@Body() dto: CreatePaymentAccountDto) {
+    return this.billingService.createPaymentAccount(dto);
+  }
 
   @Get('rules')
   @ApiOperation({ summary: 'Get all billing rules' })

@@ -1,9 +1,27 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsEnum, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+} from 'class-validator';
 import { BillingCycle } from '../../common/enums/billing-cycle.enum';
 
 export class GenerateInvoiceDto {
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'When true, create one-time manual invoice with zero base charges and no automatic adjustments.',
+  })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  manualOneTime?: boolean;
+
   @ApiPropertyOptional({ example: 'rule_001' })
   @IsOptional()
   @IsString()

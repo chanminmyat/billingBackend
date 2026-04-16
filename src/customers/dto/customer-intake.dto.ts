@@ -5,6 +5,7 @@ import {
   IsDateString,
   IsEmail,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -235,6 +236,19 @@ export class BillingInformationDto {
   @IsNumber()
   @Min(0)
   additionalFees?: number;
+
+  @ApiPropertyOptional({ example: 'yes', enum: ['yes', 'no'] })
+  @IsOptional()
+  @IsString()
+  @IsIn(['yes', 'no'])
+  collectionService?: 'yes' | 'no';
+
+  @ApiPropertyOptional({ example: 1500 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  collectionFee?: number;
 
   @ApiPropertyOptional({ example: 'no' })
   @IsOptional()

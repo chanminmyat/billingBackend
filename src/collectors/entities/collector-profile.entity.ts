@@ -32,6 +32,9 @@ export class CollectorProfile {
   @Column({ length: 120, nullable: true })
   route?: string | null;
 
+  @Column({ length: 30, nullable: true })
+  language?: string | null;
+
   @Column({ length: 200, nullable: true })
   notes?: string | null;
 

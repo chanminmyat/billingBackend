@@ -32,6 +32,11 @@ export class UpdateCollectorDto {
   @IsString()
   nrc?: string;
 
+  @ApiPropertyOptional({ example: 'burmese' })
+  @IsOptional()
+  @IsString()
+  language?: string;
+
   @ApiPropertyOptional({ example: '162, sanchaung street, Pauk, Pakokku' })
   @IsOptional()
   @IsString()

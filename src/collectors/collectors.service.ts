@@ -65,6 +65,7 @@ export class CollectorsService {
       address: payload.address,
       area: payload.area,
       nrc: payload.nrc,
+      language: payload.language?.trim().toLowerCase(),
       status: payload.status,
       user,
     });
@@ -121,6 +122,10 @@ export class CollectorsService {
 
     if (payload.nrc) {
       collector.nrc = payload.nrc.trim();
+    }
+
+    if (payload.language) {
+      collector.language = payload.language.trim().toLowerCase();
     }
 
     if (payload.address) {

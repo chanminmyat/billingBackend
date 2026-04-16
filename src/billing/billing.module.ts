@@ -10,6 +10,7 @@ import { Bill } from './entities/bill.entity';
 import { BillingRule } from './entities/billing-rule.entity';
 import { CustomerRecurringAdjustment } from './entities/customer-recurring-adjustment.entity';
 import { GlobalInvoiceAdjustment } from './entities/global-invoice-adjustment.entity';
+import { PaymentAccount } from './entities/payment-account.entity';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { GlobalInvoiceAdjustment } from './entities/global-invoice-adjustment.en
       BillingRule,
       CustomerRecurringAdjustment,
       GlobalInvoiceAdjustment,
+      PaymentAccount,
       Customer,
       Subscription,
       User,

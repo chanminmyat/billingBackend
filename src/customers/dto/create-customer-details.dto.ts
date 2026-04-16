@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEmail, IsEnum, IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsBoolean, IsEmail, IsEnum, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 import { CustomerStatus } from '../../common/enums/customer-status.enum';
 import { CustomerType } from '../../common/enums/customer-type.enum';
 
@@ -41,10 +42,33 @@ export class CreateCustomerDetailsDto {
   @IsString()
   billingAddress?: string;
 
+  @ApiPropertyOptional({ example: 'https://maps.google.com/?q=16.8,96.1' })
+  @IsOptional()
+  @IsString()
+  installationMapLink?: string;
+
+  @ApiPropertyOptional({ example: 'https://maps.google.com/?q=16.8,96.1' })
+  @IsOptional()
+  @IsString()
+  billingMapLink?: string;
+
   @ApiPropertyOptional({ example: 'col000001' })
   @IsOptional()
   @IsString()
   collectorCode?: string | null;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  collectionServiceEnabled?: boolean;
+
+  @ApiPropertyOptional({ example: 1500 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0)
+  collectionFee?: number;
 
   @ApiPropertyOptional({ example: 'Mg Aung' })
   @ValidateIf((dto) => dto.customerType === CustomerType.INDIVIDUAL)

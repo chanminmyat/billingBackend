@@ -1,6 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsEnum, IsOptional, IsString } from 'class-validator';
-import { UserStatus } from '../../common/enums/user-status.enum';
+import { IsEmail, IsOptional, IsString } from 'class-validator';
 
 export class CollectorIntakeDto {
   @ApiProperty({ example: 'May Hanna' })
@@ -26,6 +25,11 @@ export class CollectorIntakeDto {
   @ApiProperty({ example: '7/KAWANA(T)123412' })
   @IsString()
   nrc: string;
+
+  @ApiProperty({ example: 'burmese', required: false })
+  @IsOptional()
+  @IsString()
+  language?: string;
 
   @ApiProperty({ example: '162, sanchaung street, Pauk, Pakokku' })
   @IsString()

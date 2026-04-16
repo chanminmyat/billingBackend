@@ -35,6 +35,12 @@ export class UpsertCollectorProfileDto {
   @MaxLength(120)
   route?: string;
 
+  @ApiPropertyOptional({ example: 'burmese', maxLength: 30 })
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  language?: string;
+
   @ApiPropertyOptional({ example: 'Covers south district', maxLength: 200 })
   @IsOptional()
   @IsString()
