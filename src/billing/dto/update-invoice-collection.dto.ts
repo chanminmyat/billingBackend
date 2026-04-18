@@ -54,4 +54,9 @@ export class UpdateInvoiceCollectionDto {
   @IsOptional()
   @IsString()
   timestamp?: string;
+
+  @ApiPropertyOptional({ example: 'Cash' })
+  @IsOptional()
+  @IsString()
+  paymentMethod?: string;
 }

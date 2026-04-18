@@ -16,6 +16,7 @@ import {
 } from './dto/assign-billing-rule.dto';
 import { CreateBillingRuleDto } from './dto/create-billing-rule.dto';
 import { CreatePaymentAccountDto } from './dto/create-payment-account.dto';
+import { CreateReceiptDto } from './dto/create-receipt.dto';
 import { GenerateInvoiceDto } from './dto/generate-invoice.dto';
 import { MarkInvoicePaidDto } from './dto/mark-invoice-paid.dto';
 import { UpdateBillingRuleDto } from './dto/update-billing-rule.dto';
@@ -95,6 +96,12 @@ export class BillingController {
     return this.billingService.getInvoices(customerId);
   }
 
+  @Get('receipts')
+  @ApiOperation({ summary: 'Get generated receipt list' })
+  getReceipts() {
+    return this.billingService.getReceipts();
+  }
+
   @Get('invoices/:id')
   @ApiOperation({ summary: 'Get invoice details' })
   getInvoice(@Param('id') id: string) {
@@ -133,6 +140,18 @@ export class BillingController {
   @ApiOperation({ summary: 'Mark invoice as paid and activate pending customer' })
   markPaid(@Param('id') id: string, @Body() dto: MarkInvoicePaidDto) {
     return this.billingService.markInvoicePaid(id, dto);
+  }
+
+  @Post('invoices/:id/receipt')
+  @ApiOperation({ summary: 'Generate receipt (if unpaid, confirm payment + generate receipt)' })
+  generateReceipt(@Param('id') id: string, @Body() dto: CreateReceiptDto) {
+    return this.billingService.generateReceiptForInvoice(id, dto);
+  }
+
+  @Post('invoices/:id/receipt/cancel')
+  @ApiOperation({ summary: 'Cancel a generated receipt and mark the invoice cancelled' })
+  cancelReceipt(@Param('id') id: string) {
+    return this.billingService.cancelReceipt(id);
   }
 
   @Post('invoices/:id/collection-workflow')

@@ -20,6 +20,7 @@ import {
 } from './dto/assign-billing-rule.dto';
 import { CreateBillingRuleDto } from './dto/create-billing-rule.dto';
 import { CreatePaymentAccountDto } from './dto/create-payment-account.dto';
+import { CreateReceiptDto } from './dto/create-receipt.dto';
 import { UpdateBillingRuleDto } from './dto/update-billing-rule.dto';
 import {
   GlobalInvoiceAdjustmentInputDto,
@@ -352,6 +353,104 @@ export class BillingService {
     });
   }
 
+  async getReceipts() {
+    const paidInvoices = await this.billsRepository.find({
+      where: { status: 'paid' },
+      relations: {
+        customer: true,
+        subscription: {
+          plan: true,
+        },
+      },
+      order: {
+        paidAt: 'DESC',
+        issuedAt: 'DESC',
+      },
+    });
+
+    return paidInvoices.filter((invoice) => Boolean(invoice.receiptNo?.trim()));
+  }
+
+  async generateReceiptForInvoice(invoiceId: string, dto?: CreateReceiptDto) {
+    const invoice = await this.billsRepository.findOne({
+      where: { id: invoiceId },
+      relations: {
+        customer: true,
+        subscription: {
+          plan: true,
+        },
+        adjustments: true,
+      },
+    });
+
+    if (!invoice) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    const invoiceStatus = String(invoice.status ?? '').trim().toLowerCase();
+    if (invoiceStatus === 'cancelled') {
+      throw new BadRequestException('Cancelled invoice cannot generate receipt');
+    }
+
+    const requestedPaymentMethod = dto?.paymentMethod?.trim() || null;
+    const paymentMethodFromCollection = this.extractPaymentMethodFromCollectionEvents(invoice);
+    const resolvedPaymentMethod =
+      requestedPaymentMethod ||
+      invoice.paymentMethod ||
+      paymentMethodFromCollection ||
+      null;
+
+    if (invoiceStatus !== 'paid') {
+      if (!resolvedPaymentMethod) {
+        throw new BadRequestException(
+          'Payment method is required to create receipt for unpaid invoice',
+        );
+      }
+
+      const paidAt = dto?.paidAt ? new Date(dto.paidAt) : new Date();
+      invoice.status = 'paid';
+      invoice.paidAt = paidAt;
+      invoice.paymentMethod = resolvedPaymentMethod;
+      invoice.collectionStatus = 'completed';
+      invoice.collectionUpdatedAt = paidAt;
+
+      const collectionEvents = this.getCollectionEvents(invoice);
+      const collectionEventTimestamp = paidAt.toISOString();
+      collectionEvents.push({
+        id: this.generateCollectionEventId(collectionEventTimestamp),
+        type: 'admin_confirmed',
+        label: `Admin confirmed payment received via ${resolvedPaymentMethod}.`,
+        note: dto?.receiptNo?.trim()
+          ? `Receipt: ${dto.receiptNo.trim()}`
+          : undefined,
+        timestamp: collectionEventTimestamp,
+        actorName: 'admin',
+        actorRole: 'admin',
+      });
+      invoice.collectionEvents = collectionEvents;
+    } else if (resolvedPaymentMethod) {
+      invoice.paymentMethod = resolvedPaymentMethod;
+    }
+
+    if (dto?.receiptNo?.trim()) {
+      invoice.receiptNo = dto.receiptNo.trim();
+    }
+
+    if (!invoice.receiptNo) {
+      invoice.receiptNo = await this.generateReceiptNo(
+        invoice.invoiceNo,
+        invoice.paidAt ?? new Date(),
+        invoice.id,
+      );
+    }
+
+    await this.billsRepository.save(invoice);
+
+    await this.activateCustomerAndUser(invoice.customer);
+
+    return this.getInvoiceById(invoice.id);
+  }
+
   async getInvoiceById(invoiceId: string) {
     const invoice = await this.billsRepository.findOne({
       where: { id: invoiceId },
@@ -448,8 +547,20 @@ export class BillingService {
 
     invoice.status = 'paid';
     invoice.paidAt = dto.paidAt ? new Date(dto.paidAt) : new Date();
-    invoice.paymentMethod = dto.paymentMethod?.trim() || invoice.paymentMethod || null;
+    const paymentMethodFromCollection = this.extractPaymentMethodFromCollectionEvents(invoice);
+    invoice.paymentMethod =
+      dto.paymentMethod?.trim() ||
+      invoice.paymentMethod ||
+      paymentMethodFromCollection ||
+      null;
     invoice.receiptNo = dto.receiptNo?.trim() || invoice.receiptNo || null;
+    if (!invoice.receiptNo) {
+      invoice.receiptNo = await this.generateReceiptNo(
+        invoice.invoiceNo,
+        invoice.paidAt ?? new Date(),
+        invoice.id,
+      );
+    }
 
     const collectionEventTimestamp = (invoice.paidAt ?? new Date()).toISOString();
     const collectionEvents = this.getCollectionEvents(invoice);
@@ -473,22 +584,7 @@ export class BillingService {
 
     await this.billsRepository.save(invoice);
 
-    const customer = invoice.customer;
-    if (customer && customer.status !== CustomerStatus.ENABLE) {
-      customer.status = CustomerStatus.ENABLE;
-      await this.customersRepository.save(customer);
-    }
-
-    if (customer) {
-      const user = await this.usersRepository.findOne({
-        where: { customer: { id: customer.id } },
-      });
-
-      if (user && user.status !== UserStatus.ACTIVE) {
-        user.status = UserStatus.ACTIVE;
-        await this.usersRepository.save(user);
-      }
-    }
+    await this.activateCustomerAndUser(invoice.customer);
 
     return this.getInvoiceById(invoice.id);
   }
@@ -514,6 +610,48 @@ export class BillingService {
       invoice.status = 'cancelled';
       await this.billsRepository.save(invoice);
     }
+
+    return this.getInvoiceById(invoice.id);
+  }
+
+  async cancelReceipt(invoiceId: string) {
+    const invoice = await this.billsRepository.findOne({
+      where: { id: invoiceId },
+      relations: {
+        customer: true,
+        subscription: {
+          plan: true,
+        },
+        adjustments: true,
+      },
+    });
+
+    if (!invoice) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    const currentStatus = String(invoice.status ?? '').trim().toLowerCase();
+    if (currentStatus === 'cancelled') {
+      return this.getInvoiceById(invoice.id);
+    }
+
+    invoice.status = 'cancelled';
+    invoice.collectionStatus = 'completed';
+    invoice.collectionUpdatedAt = new Date();
+
+    const collectionEvents = this.getCollectionEvents(invoice);
+    const eventTimestamp = new Date().toISOString();
+    collectionEvents.push({
+      id: this.generateCollectionEventId(eventTimestamp),
+      type: 'admin_confirmed',
+      label: 'Receipt cancelled by admin.',
+      timestamp: eventTimestamp,
+      actorName: 'admin',
+      actorRole: 'admin',
+    });
+    invoice.collectionEvents = collectionEvents;
+
+    await this.billsRepository.save(invoice);
 
     return this.getInvoiceById(invoice.id);
   }
@@ -553,6 +691,12 @@ export class BillingService {
     invoice.collectionStatus = dto.status;
     invoice.collectionUpdatedAt = new Date(eventTimestamp);
     invoice.collectionEvents = collectionEvents;
+    const paymentMethodFromRequest = dto.paymentMethod?.trim();
+    const paymentMethodFromNote = this.extractPaymentMethodFromCollectionNote(dto.note);
+    const resolvedPaymentMethod = paymentMethodFromRequest || paymentMethodFromNote;
+    if (resolvedPaymentMethod) {
+      invoice.paymentMethod = resolvedPaymentMethod;
+    }
 
     await this.billsRepository.save(invoice);
 
@@ -931,6 +1075,63 @@ export class BillingService {
   }
 
 
+  private async generateReceiptNo(
+    invoiceNo: string | null | undefined,
+    referenceDate: Date = new Date(),
+    excludeInvoiceId?: string,
+  ): Promise<string> {
+    const baseCore = this.getReceiptCoreFromInvoiceNo(invoiceNo, referenceDate);
+    const baseReceiptNo = `RC-${baseCore}`;
+
+    let nextReceiptNo = baseReceiptNo;
+    let suffix = 1;
+
+    while (true) {
+      const builder = this.billsRepository
+        .createQueryBuilder('bill')
+        .where('UPPER(bill.receiptNo) = :receiptNo', {
+          receiptNo: nextReceiptNo.toUpperCase(),
+        });
+
+      if (excludeInvoiceId) {
+        builder.andWhere('bill.id != :excludeInvoiceId', { excludeInvoiceId });
+      }
+
+      const exists = (await builder.getCount()) > 0;
+      if (!exists) {
+        return nextReceiptNo;
+      }
+
+      suffix += 1;
+      nextReceiptNo = `${baseReceiptNo}-${String(suffix).padStart(2, '0')}`;
+    }
+  }
+
+  private getReceiptCoreFromInvoiceNo(
+    invoiceNo: string | null | undefined,
+    referenceDate: Date = new Date(),
+  ): string {
+    const rawInvoiceNo = String(invoiceNo ?? '')
+      .trim()
+      .toUpperCase();
+    if (!rawInvoiceNo) {
+      const month = String(referenceDate.getMonth() + 1).padStart(2, '0');
+      const year = String(referenceDate.getFullYear()).slice(-2);
+      const stamp = String(referenceDate.getTime()).slice(-4);
+      return `${month}${year}${stamp}`;
+    }
+
+    if (rawInvoiceNo.startsWith('INV-')) {
+      return rawInvoiceNo.slice(4);
+    }
+
+    if (rawInvoiceNo.startsWith('INV')) {
+      return rawInvoiceNo.slice(3).replace(/^-+/, '');
+    }
+
+    return rawInvoiceNo;
+  }
+
   private async generateInvoiceNo(referenceDate: Date = new Date()): Promise<string> {
     const month = String(referenceDate.getMonth() + 1).padStart(2, '0');
     const year = String(referenceDate.getFullYear()).slice(-2);
@@ -1251,6 +1452,52 @@ export class BillingService {
 
   private generateCollectionEventId(timestamp: string): string {
     return `${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private async activateCustomerAndUser(customer?: Customer | null) {
+    if (!customer) return;
+
+    if (customer.status !== CustomerStatus.ENABLE) {
+      customer.status = CustomerStatus.ENABLE;
+      await this.customersRepository.save(customer);
+    }
+
+    const user = await this.usersRepository.findOne({
+      where: { customer: { id: customer.id } },
+    });
+
+    if (user && user.status !== UserStatus.ACTIVE) {
+      user.status = UserStatus.ACTIVE;
+      await this.usersRepository.save(user);
+    }
+  }
+
+  private extractPaymentMethodFromCollectionNote(note?: string): string | null {
+    const rawNote = String(note ?? '').trim();
+    if (!rawNote) return null;
+
+    const match = rawNote.match(/payment\s*method\s*:\s*([^|]+)/i);
+    if (!match) return null;
+
+    const value = match[1]?.trim();
+    return value ? value : null;
+  }
+
+  private extractPaymentMethodFromCollectionEvents(invoice: Bill): string | null {
+    const events = this.getCollectionEvents(invoice)
+      .slice()
+      .sort((a, b) => {
+        const aTime = new Date(a.timestamp).getTime();
+        const bTime = new Date(b.timestamp).getTime();
+        return bTime - aTime;
+      });
+
+    for (const event of events) {
+      const fromNote = this.extractPaymentMethodFromCollectionNote(event.note);
+      if (fromNote) return fromNote;
+    }
+
+    return null;
   }
 
   private toNumber(
