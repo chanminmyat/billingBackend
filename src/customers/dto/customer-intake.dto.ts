@@ -278,6 +278,21 @@ export class CustomerIntakeDto {
   @IsBoolean()
   createInvoiceNow?: boolean;
 
+  @ApiPropertyOptional({ example: 'col000001' })
+  @IsOptional()
+  @IsString()
+  collectorCode?: string | null;
+
+  @ApiPropertyOptional({ example: '3e2f20f7-2a44-4ac7-92cc-87bfdd4f1f34' })
+  @IsOptional()
+  @IsString()
+  billingRuleId?: string | null;
+
+  @ApiPropertyOptional({ example: 'Monthly Default Rule' })
+  @IsOptional()
+  @IsString()
+  billingRuleName?: string | null;
+
   @ApiProperty({ enum: CustomerType })
   @IsEnum(CustomerType)
   customerType: CustomerType;

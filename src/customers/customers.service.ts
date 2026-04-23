@@ -7,6 +7,7 @@ import { CustomerType } from '../common/enums/customer-type.enum';
 import { IpType } from '../common/enums/ip-type.enum';
 import { UserStatus } from '../common/enums/user-status.enum';
 import { Bill } from '../billing/entities/bill.entity';
+import { BillingRule } from '../billing/entities/billing-rule.entity';
 import { BillingService } from '../billing/billing.service';
 import { Plan } from '../plans/entities/plan.entity';
 import { SubscriptionNetwork } from '../subscription-networks/entities/subscription-network.entity';
@@ -30,6 +31,8 @@ export class CustomersService {
     private readonly networksRepository: Repository<SubscriptionNetwork>,
     @InjectRepository(Bill)
     private readonly billsRepository: Repository<Bill>,
+    @InjectRepository(BillingRule)
+    private readonly billingRulesRepository: Repository<BillingRule>,
     private readonly billingService: BillingService,
   ) {}
 
@@ -173,6 +176,8 @@ export class CustomersService {
       billingRuleName?: string | null;
       collectionServiceEnabled: boolean;
       collectionFee: string;
+      defaultInstallationFee: string;
+      defaultAdditionalFees: string;
       companyName?: string | null;
       personalName?: string | null;
       primaryPhone: string;
@@ -231,6 +236,8 @@ export class CustomersService {
         billingRuleName: customer.billingRuleName ?? null,
         collectionServiceEnabled: customer.collectionServiceEnabled ?? true,
         collectionFee: customer.collectionFee ?? '0.00',
+        defaultInstallationFee: customer.defaultInstallationFee ?? '0.00',
+        defaultAdditionalFees: customer.defaultAdditionalFees ?? '0.00',
         companyName: customer.companyName ?? null,
         personalName: customer.personalName ?? null,
         primaryPhone: customer.primaryPhone,
@@ -273,21 +280,23 @@ export class CustomersService {
   }
 
   async generateCustomerCode(): Promise<string> {
-    const latest = await this.customersRepository
+    const customers = await this.customersRepository
       .createQueryBuilder('customer')
       .select('customer.customerCode', 'customerCode')
-      .where('customer.customerCode LIKE :prefix', { prefix: 'cust%' })
-      .orderBy('customer.customerCode', 'DESC')
-      .limit(1)
-      .getRawOne<{ customerCode?: string }>();
+      .getRawMany<{ customerCode?: string }>();
 
-    const lastCode = latest?.customerCode;
-    const lastNumber = lastCode
-      ? Number.parseInt(lastCode.replace('cust', ''), 10)
-      : 0;
-    const nextNumber = Number.isNaN(lastNumber) ? 1 : lastNumber + 1;
+    const maxNumber = customers.reduce((highest, row) => {
+      const code = String(row?.customerCode ?? '').trim();
+      if (!code) return highest;
+      const digits = code.match(/(\d+)$/)?.[1];
+      if (!digits) return highest;
+      const parsed = Number.parseInt(digits, 10);
+      return Number.isNaN(parsed) ? highest : Math.max(highest, parsed);
+    }, 0);
 
-    return `cust${nextNumber.toString().padStart(6, '0')}`;
+    const nextNumber = maxNumber + 1;
+    const padLength = Math.max(4, String(nextNumber).length);
+    return `C${nextNumber.toString().padStart(padLength, '0')}`;
   }
 
 
@@ -337,11 +346,28 @@ export class CustomersService {
     const collectionFee = collectionServiceEnabled
       ? this.roundTo2(this.toNumber(dto.billingInformation?.collectionFee ?? 0))
       : 0;
+    const normalizedBillingRuleId = this.normalizeOptionalString(dto.billingRuleId) ?? null;
+    let billingRuleId: string | null = null;
+    let billingRuleName: string | null = null;
+
+    if (normalizedBillingRuleId) {
+      const matchedRule = await this.billingRulesRepository.findOne({
+        where: { id: normalizedBillingRuleId },
+      });
+      if (!matchedRule) {
+        throw new BadRequestException('Billing rule not found');
+      }
+      billingRuleId = matchedRule.id;
+      billingRuleName = matchedRule.name;
+    }
 
     const customer = this.customersRepository.create({
       customerCode,
       customerType: dto.customerType,
       status: CustomerStatus.PENDING,
+      collectorCode: dto.collectorCode ?? null,
+      billingRuleId,
+      billingRuleName,
       primaryPhone: dto.contactInformation.primaryPhone,
       secondaryPhone: dto.contactInformation.secondaryPhone ?? null,
       contactEmail: dto.contactInformation.email ?? null,
@@ -521,6 +547,8 @@ export class CustomersService {
       customer,
       subscription,
       invoiceNo: await this.generateInvoiceNo(),
+      billingRuleId: customer.billingRuleId ?? null,
+      billingRuleName: customer.billingRuleName ?? null,
       invoiceType: 'auto',
       invoiceDate,
       billingPeriodFrom: billingPeriodStart,

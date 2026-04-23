@@ -105,7 +105,7 @@ export class AuthService {
       );
       createdCustomerId = customerRecord.id;
 
-      const { email, name, nrc } = this.extractUserCredentials(customer);
+      const { email, name, nrc } = this.extractUserCredentials(customer, customerCode);
       const username = customerCode;
       const password = nrc;
 
@@ -230,15 +230,16 @@ export class AuthService {
     };
   }
 
-  private extractUserCredentials(customerPayload: CreateCustomerDto['customer']) {
+  private extractUserCredentials(
+    customerPayload: CreateCustomerDto['customer'],
+    customerCode: string,
+  ) {
     if (!customerPayload) {
       throw new BadRequestException('Customer details are required');
     }
 
-    const email = customerPayload.contactInformation.email;
-    if (!email) {
-      throw new BadRequestException('Contact email is required');
-    }
+    const rawEmail = customerPayload.contactInformation.email?.trim();
+    const email = rawEmail && rawEmail.length > 0 ? rawEmail : `${customerCode.toLowerCase()}@customers.local`;
 
     const isIndividual = customerPayload.customerType === 'individual';
     const name = isIndividual

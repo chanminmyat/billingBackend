@@ -5,7 +5,7 @@ import { CustomerStatus } from '../../common/enums/customer-status.enum';
 import { CustomerType } from '../../common/enums/customer-type.enum';
 
 export class CreateCustomerDetailsDto {
-  @ApiProperty({ example: 'CUST-000001' })
+  @ApiProperty({ example: 'C0001' })
   @IsString()
   customerCode: string;
 

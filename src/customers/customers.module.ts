@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Bill } from '../billing/entities/bill.entity';
+import { BillingRule } from '../billing/entities/billing-rule.entity';
 import { Plan } from '../plans/entities/plan.entity';
 import { SubscriptionNetwork } from '../subscription-networks/entities/subscription-network.entity';
 import { Subscription } from '../subscriptions/entities/subscription.entity';
@@ -18,6 +19,7 @@ import { BillingModule } from '../billing/billing.module';
       Subscription,
       SubscriptionNetwork,
       Bill,
+      BillingRule,
     ]),
     SubscriptionsModule,
     BillingModule,

@@ -13,6 +13,15 @@ import { BillingCycle } from '../../common/enums/billing-cycle.enum';
 
 export class GenerateInvoiceDto {
   @ApiPropertyOptional({
+    example: 'old-invoice-uuid',
+    description:
+      'When provided, this invoice will be cancelled before generating the new invoice (edit/revision flow).',
+  })
+  @IsOptional()
+  @IsString()
+  replaceInvoiceId?: string;
+
+  @ApiPropertyOptional({
     example: true,
     description:
       'When true, create one-time manual invoice with zero base charges and no automatic adjustments.',

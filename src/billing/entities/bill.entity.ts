@@ -29,6 +29,8 @@ export type InvoiceCollectionEventType =
   | 'collector_collected'
   | 'admin_confirmed';
 
+export type ReceiptStatus = 'none' | 'issued' | 'cancelled';
+
 export type InvoiceCollectionEvent = {
   id: string;
   type: InvoiceCollectionEventType;
@@ -137,6 +139,9 @@ export class Bill {
 
   @Column({ nullable: true })
   receiptNo?: string | null;
+
+  @Column({ type: 'varchar', default: 'none' })
+  receiptStatus: ReceiptStatus;
 
   @Column({ type: 'date', nullable: true })
   dueDate?: string | null;
