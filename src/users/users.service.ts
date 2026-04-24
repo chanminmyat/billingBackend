@@ -100,6 +100,31 @@ export class UsersService {
     }));
   }
 
+  async getUsersByRole(role: User['role']): Promise<PublicUser[]> {
+    const users = await this.usersRepository.find({
+      where: { role },
+      relations: {
+        collectorProfile: true,
+        customer: true,
+      },
+      order: { createdAt: 'DESC' },
+    });
+
+    return users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      phone: user.phone ?? null,
+      username: user.username ?? null,
+      role: user.role,
+      status: user.status,
+      collectorProfile: user.collectorProfile ?? null,
+      customer: user.customer ?? null,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    }));
+  }
+
   async findByIdentifierWithPassword(identifier: string): Promise<User | null> {
     const sanitized = identifier.trim();
     const normalized = sanitized.toLowerCase();

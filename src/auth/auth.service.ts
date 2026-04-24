@@ -20,6 +20,7 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
+import { CreateAdminDto } from './dto/create-admin.dto';
 
 @Injectable()
 export class AuthService {
@@ -83,6 +84,22 @@ export class AuthService {
       user,
       collectorCode,
       collector,
+    );
+
+    return this.usersService.buildPublicProfile(user.id);
+  }
+
+  async listAdminAccounts() {
+    return this.usersService.getUsersByRole(UserRole.ADMIN);
+  }
+
+  async createAdminAccount(dto: CreateAdminDto) {
+    if (!dto.admin) {
+      throw new BadRequestException('Admin details are required');
+    }
+
+    const user = await this.usersService.createUser(
+      this.buildCreateUserPayload(dto.admin, UserRole.ADMIN),
     );
 
     return this.usersService.buildPublicProfile(user.id);

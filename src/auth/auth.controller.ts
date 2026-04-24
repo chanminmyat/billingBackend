@@ -1,9 +1,10 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { AuthService } from './auth.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import { CreateCollectorDto } from './dto/create-collector.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { CreateAdminDto } from './dto/create-admin.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { ResetPasswordDto } from './dto/reset-password.dto';
@@ -31,6 +32,19 @@ export class AuthController {
   @ApiBody({ type: CreateCustomerDto })
   createCustomer(@Body() dto: CreateCustomerDto) {
     return this.authService.createCustomerAccount(dto);
+  }
+
+  @Get('admins')
+  @ApiOperation({ summary: 'List all admin accounts' })
+  listAdmins() {
+    return this.authService.listAdminAccounts();
+  }
+
+  @Post('admins')
+  @ApiOperation({ summary: 'Create an admin account' })
+  @ApiBody({ type: CreateAdminDto })
+  createAdmin(@Body() dto: CreateAdminDto) {
+    return this.authService.createAdminAccount(dto);
   }
 
   @Post('forgot-password')
