@@ -936,18 +936,49 @@ export class BillingService {
       options?.dueAfterDays,
       latestInvoice?.dueAfterDays ?? assignedRule?.dueAfterDays ?? undefined,
     );
+    const normalizedFirstFixedChargeMode = String(
+      options?.fixedFirstInvoiceChargeMode ?? '',
+    )
+      .trim()
+      .toLowerCase();
+    const effectiveFirstFixedChargeMode =
+      normalizedFirstFixedChargeMode === 'full_month' ||
+      normalizedFirstFixedChargeMode === 'prorated'
+        ? normalizedFirstFixedChargeMode
+        : 'prorated';
+    const resolvedFixedDueDay =
+      this.normalizePositiveInt(
+        options?.fixedDueDay,
+        this.normalizePositiveInt(latestInvoice?.billingDay, resolvedFixedStartDay),
+      ) ?? 15;
+    const resolvedInvoiceBillingDay =
+      effectiveFirstInvoiceMode === 'fixed'
+        ? resolvedFixedDueDay
+        : latestInvoice?.billingDay ?? periodStartDate.getDate();
+    const resolvedDueDate =
+      effectiveFirstInvoiceMode === 'fixed'
+        ? this.getNextDayOccurrence(periodStartDate, resolvedFixedDueDay)
+        : this.addDays(periodStartDate, resolvedDueAfterDays);
 
     const monthlyFee = this.toNumber(latestSubscription.plan.monthlyFee);
     const cycleMonths = this.getCycleMonths(resolvedCycle, resolvedCustomMonths);
     const isFirstInvoice = !latestInvoice;
     const shouldProrateFirstFixedInvoice =
-      isFirstInvoice && effectiveFirstInvoiceMode === 'fixed';
+      isFirstInvoice &&
+      effectiveFirstInvoiceMode === 'fixed' &&
+      effectiveFirstFixedChargeMode === 'prorated';
+    const shouldUseFullMonthFirstFixedInvoice =
+      isFirstInvoice &&
+      effectiveFirstInvoiceMode === 'fixed' &&
+      effectiveFirstFixedChargeMode === 'full_month';
     const cycleFee = shouldProrateFirstFixedInvoice
       ? this.roundTo2(
           (monthlyFee * this.daysBetweenInclusive(periodStartDate, periodEndDate)) /
             this.daysInMonth(periodStartDate),
         )
-      : this.roundTo2(monthlyFee * cycleMonths);
+      : shouldUseFullMonthFirstFixedInvoice
+        ? this.roundTo2(monthlyFee)
+        : this.roundTo2(monthlyFee * cycleMonths);
     const installationFee = isFirstInvoice
       ? this.roundTo2(this.toNumber(customer.defaultInstallationFee))
       : 0;
@@ -971,7 +1002,7 @@ export class BillingService {
       billingCycle: resolvedCycle,
       customBillingMonths: resolvedCycle === BillingCycle.CUSTOM ? resolvedCustomMonths : null,
       billingMonth: period.from.slice(0, 7),
-      billingDay: latestInvoice?.billingDay ?? periodStartDate.getDate(),
+      billingDay: resolvedInvoiceBillingDay,
       dueAfterDays: resolvedDueAfterDays,
       billingRuleId: requestedRuleId || null,
       billingRuleName:
@@ -989,7 +1020,7 @@ export class BillingService {
       collectionStatus: 'idle',
       collectionEvents: [],
       collectionUpdatedAt: null,
-      dueDate: this.toDateString(this.addDays(periodStartDate, resolvedDueAfterDays)),
+      dueDate: this.toDateString(resolvedDueDate),
     });
 
     const savedInvoice = await this.billsRepository.save(invoice);
@@ -1502,6 +1533,14 @@ export class BillingService {
       return current;
     }
     return this.dateAtDay(anchor.getFullYear(), anchor.getMonth() + 1, startDay);
+  }
+
+  private getNextDayOccurrence(anchor: Date, day: number): Date {
+    const current = this.dateAtDay(anchor.getFullYear(), anchor.getMonth(), day);
+    if (current >= anchor) {
+      return current;
+    }
+    return this.dateAtDay(anchor.getFullYear(), anchor.getMonth() + 1, day);
   }
 
   private dateAtDay(year: number, monthIndex: number, day: number): Date {

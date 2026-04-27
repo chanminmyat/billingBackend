@@ -3,6 +3,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -93,4 +94,13 @@ export class GenerateInvoiceDto {
   @Min(1)
   @Max(31)
   fixedDueDay?: number;
+
+  @ApiPropertyOptional({
+    example: 'full_month',
+    description: 'How to charge first fixed invoice: full_month | prorated',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['full_month', 'prorated'])
+  fixedFirstInvoiceChargeMode?: 'full_month' | 'prorated';
 }

@@ -114,10 +114,9 @@ export class ServicesDto {
   @IsString()
   bandwidthPlan?: string;
 
-  @ApiPropertyOptional({ example: '2026-01-09' })
-  @IsOptional()
+  @ApiProperty({ example: '2026-01-09' })
   @IsDateString()
-  serviceStartDate?: string;
+  serviceStartDate: string;
 
   @ApiPropertyOptional({ example: '2026-01-10' })
   @IsOptional()
@@ -193,6 +192,15 @@ export class BillingInformationDto {
   @Min(1)
   @Max(31)
   fixedDueDay?: number;
+
+  @ApiPropertyOptional({
+    example: 'full_month',
+    description: 'How to charge first fixed invoice: full_month | prorated',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['full_month', 'prorated'])
+  fixedFirstInvoiceChargeMode?: 'full_month' | 'prorated';
 
   @ApiPropertyOptional({ enum: BillingCycle, default: BillingCycle.MONTHLY })
   @IsOptional()

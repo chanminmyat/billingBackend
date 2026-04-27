@@ -511,17 +511,28 @@ export class CustomersService {
       const fixedStartDay = dto.billingInformation.fixedStartDay ?? 1;
       const fixedDueDay =
         dto.billingInformation.fixedDueDay ?? dto.billingInformation.billingDay ?? 15;
+      const normalizedFixedFirstChargeMode = String(
+        dto.billingInformation.fixedFirstInvoiceChargeMode ?? '',
+      )
+        .trim()
+        .toLowerCase();
+      const useFullMonthFirstFixedCharge =
+        normalizedFixedFirstChargeMode === 'full_month';
 
       const nextCycleStart = this.getNextFixedCycleStartDate(baseDate, fixedStartDay);
       billingPeriodEndDate = this.addDays(nextCycleStart, -1);
       dueDateValue = this.getNextDayOccurrence(baseDate, fixedDueDay);
 
-      const proratedDays = this.daysBetweenInclusive(
-        billingPeriodStartDate,
-        billingPeriodEndDate,
-      );
-      const monthDays = this.daysInMonth(billingPeriodStartDate);
-      monthlyFee = this.roundTo2((monthlyFeeBase * proratedDays) / monthDays);
+      if (useFullMonthFirstFixedCharge) {
+        monthlyFee = this.roundTo2(monthlyFeeBase);
+      } else {
+        const proratedDays = this.daysBetweenInclusive(
+          billingPeriodStartDate,
+          billingPeriodEndDate,
+        );
+        const monthDays = this.daysInMonth(billingPeriodStartDate);
+        monthlyFee = this.roundTo2((monthlyFeeBase * proratedDays) / monthDays);
+      }
     } else {
       const billingPeriodStart = dto.services.serviceStartDate ?? this.toDateString(baseDate);
       const billingPeriodEnd = dto.services.contractStartDate ?? billingPeriodStart;
