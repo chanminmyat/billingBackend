@@ -108,6 +108,9 @@ export class Bill {
   additionalFees: string;
 
   @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
+  collectionFee: string;
+
+  @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })
   discountAmount: string;
 
   @Column({ type: 'numeric', precision: 12, scale: 2, default: 0 })

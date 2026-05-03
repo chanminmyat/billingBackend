@@ -38,7 +38,7 @@ export class CollectorProfile {
   @Column({ length: 200, nullable: true })
   notes?: string | null;
 
-  @Column({ length: 50, nullable: true })
+  @Column({ length: 50, nullable: true, unique: true })
   nrc?: string | null;
 
   @Column({ length: 50, nullable: true })

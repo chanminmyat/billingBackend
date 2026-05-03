@@ -1,4 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import { IsBoolean, IsEnum, IsOptional, IsString } from 'class-validator';
 import { PaymentAccountKind } from '../entities/payment-account.entity';
 
@@ -32,6 +33,11 @@ export class CreatePaymentAccountDto {
 
   @ApiPropertyOptional({ example: true })
   @IsOptional()
+  @Transform(({ value }) => {
+    if (typeof value === 'boolean') return value;
+    if (typeof value === 'string') return value.toLowerCase() === 'true';
+    return value;
+  })
   @IsBoolean()
   isActive?: boolean;
 }

@@ -38,21 +38,23 @@ export class CollectorsService {
   }
 
   async generateCollectorCode(): Promise<string> {
-    const latest = await this.collectorsRepository
+    const collectors = await this.collectorsRepository
       .createQueryBuilder('collector')
       .select('collector.collectorCode', 'collectorCode')
-      .where('collector.collectorCode LIKE :prefix', { prefix: 'col%' })
-      .orderBy('collector.collectorCode', 'DESC')
-      .limit(1)
-      .getRawOne<{ collectorCode?: string }>();
+      .getRawMany<{ collectorCode?: string }>();
 
-    const lastCode = latest?.collectorCode;
-    const lastNumber = lastCode
-      ? Number.parseInt(lastCode.replace('col', ''), 10)
-      : 0;
-    const nextNumber = Number.isNaN(lastNumber) ? 1 : lastNumber + 1;
+    const maxNumber = collectors.reduce((highest, row) => {
+      const code = String(row?.collectorCode ?? '').trim();
+      if (!code) return highest;
+      const digits = code.match(/(\d+)$/)?.[1];
+      if (!digits) return highest;
+      const parsed = Number.parseInt(digits, 10);
+      return Number.isNaN(parsed) ? highest : Math.max(highest, parsed);
+    }, 0);
 
-    return `col${nextNumber.toString().padStart(6, '0')}`;
+    const nextNumber = maxNumber + 1;
+    const padLength = Math.max(4, String(nextNumber).length);
+    return `CO${nextNumber.toString().padStart(padLength, '0')}`;
   }
 
   async createCollectorProfileFromIntake(
@@ -60,11 +62,16 @@ export class CollectorsService {
     collectorCode: string,
     payload: CollectorIntakeDto,
   ): Promise<CollectorProfile> {
+    const normalizedNrc = payload.nrc?.trim();
+    if (normalizedNrc) {
+      await this.assertCollectorNrcUnique(normalizedNrc);
+    }
+
     const profile = this.collectorsRepository.create({
       collectorCode,
       address: payload.address,
       area: payload.area,
-      nrc: payload.nrc,
+      nrc: normalizedNrc,
       language: payload.language?.trim().toLowerCase(),
       status: payload.status,
       user,
@@ -121,7 +128,9 @@ export class CollectorsService {
     }
 
     if (payload.nrc) {
-      collector.nrc = payload.nrc.trim();
+      const normalizedNrc = payload.nrc.trim();
+      await this.assertCollectorNrcUnique(normalizedNrc, collector.id);
+      collector.nrc = normalizedNrc;
     }
 
     if (payload.language) {
@@ -137,5 +146,19 @@ export class CollectorsService {
     }
 
     return this.collectorsRepository.save(collector);
+  }
+
+  private async assertCollectorNrcUnique(nrc: string, ignoreCollectorId?: string) {
+    const normalized = nrc.trim();
+    if (!normalized) return;
+
+    const existing = await this.collectorsRepository.findOne({
+      where: { nrc: normalized },
+      select: { id: true, nrc: true },
+    });
+
+    if (existing && existing.id !== ignoreCollectorId) {
+      throw new BadRequestException('NRC already exists');
+    }
   }
 }

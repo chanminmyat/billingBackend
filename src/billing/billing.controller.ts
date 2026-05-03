@@ -7,8 +7,16 @@ import {
   Post,
   Put,
   Query,
+  Req,
+  Res,
+  StreamableFile,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { createReadStream } from 'fs';
+import type { Request, Response } from 'express';
 import { BillingService } from './billing.service';
 import {
   AssignBillingRuleCustomersDto,
@@ -31,15 +39,29 @@ export class BillingController {
 
   @Get('payment-accounts')
   @ApiOperation({ summary: 'Get payment accounts' })
-  getPaymentAccounts(@Query('activeOnly') activeOnly?: string) {
+  getPaymentAccounts(@Query('activeOnly') activeOnly?: string, @Req() request?: Request) {
     const onlyActive = ['1', 'true', 'yes'].includes((activeOnly ?? '').toLowerCase());
-    return this.billingService.getPaymentAccounts(onlyActive);
+    const baseUrl = request ? `${request.protocol}://${request.get('host')}` : undefined;
+    return this.billingService.getPaymentAccounts(onlyActive, baseUrl);
   }
 
   @Post('payment-accounts')
   @ApiOperation({ summary: 'Create payment account' })
-  createPaymentAccount(@Body() dto: CreatePaymentAccountDto) {
-    return this.billingService.createPaymentAccount(dto);
+  @UseInterceptors(FileInterceptor('qrCode'))
+  createPaymentAccount(
+    @Body() dto: CreatePaymentAccountDto,
+    @UploadedFile() qrCodeFile?: { mimetype: string; buffer: Buffer },
+  ) {
+    return this.billingService.createPaymentAccount(dto, qrCodeFile);
+  }
+
+  @Get('payment-accounts/:id/qr')
+  @ApiOperation({ summary: 'Get payment account QR image' })
+  async getPaymentAccountQr(@Param('id') id: string, @Res({ passthrough: true }) res: Response) {
+    const fileData = await this.billingService.getPaymentAccountQrFile(id);
+    res.setHeader('Content-Type', fileData.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return new StreamableFile(createReadStream(fileData.absolutePath));
   }
 
   @Get('rules')

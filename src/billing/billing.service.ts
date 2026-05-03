@@ -3,6 +3,9 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
+import * as path from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
 import { IsNull, Not, Repository } from 'typeorm';
 import { UserStatus } from '../common/enums/user-status.enum';
@@ -41,6 +44,11 @@ import { CustomerRecurringAdjustment } from './entities/customer-recurring-adjus
 import { GlobalInvoiceAdjustment } from './entities/global-invoice-adjustment.entity';
 import { PaymentAccount, PaymentAccountKind } from './entities/payment-account.entity';
 
+type UploadedQrFile = {
+  mimetype: string;
+  buffer: Buffer;
+};
+
 @Injectable()
 export class BillingService {
   constructor(
@@ -64,17 +72,30 @@ export class BillingService {
     private readonly usersRepository: Repository<User>,
   ) {}
 
-  async getPaymentAccounts(activeOnly = false) {
-    return this.paymentAccountsRepository.find({
+  private readonly paymentQrStorageDir = path.join(
+    process.cwd(),
+    'storage',
+    'payment-account-qr',
+  );
+
+  async getPaymentAccounts(activeOnly = false, baseUrl?: string) {
+    const accounts = await this.paymentAccountsRepository.find({
       where: activeOnly ? { isActive: true } : undefined,
       order: {
         isActive: 'DESC',
         createdAt: 'DESC',
       },
     });
+    return accounts.map((account) => {
+      const qrCodeUrl = this.resolveQrCodeUrl(account, baseUrl);
+      return {
+        ...account,
+        qrCodeDataUrl: qrCodeUrl,
+      };
+    });
   }
 
-  async createPaymentAccount(dto: CreatePaymentAccountDto) {
+  async createPaymentAccount(dto: CreatePaymentAccountDto, qrCodeFile?: UploadedQrFile) {
     const kind = dto.kind;
     const accountName = dto.accountName?.trim();
     const accountNumber = dto.accountNumber?.trim();
@@ -94,7 +115,7 @@ export class BillingService {
       if (!walletType) {
         throw new BadRequestException('Wallet type is required');
       }
-      if (!qrCodeDataUrl) {
+      if (!qrCodeFile && !qrCodeDataUrl) {
         throw new BadRequestException('QR code is required for wallet');
       }
     }
@@ -103,17 +124,115 @@ export class BillingService {
       throw new BadRequestException('Bank type is required');
     }
 
+    let savedQrPath: string | null = null;
+    if (kind === PaymentAccountKind.WALLET) {
+      if (qrCodeFile) {
+        savedQrPath = await this.persistUploadedQrCode(qrCodeFile);
+      } else if (qrCodeDataUrl) {
+        savedQrPath = await this.persistDataUrlQrCode(qrCodeDataUrl);
+      }
+    }
+
     const account = this.paymentAccountsRepository.create({
       kind,
       walletType: kind === PaymentAccountKind.WALLET ? walletType ?? null : null,
       bankType: kind === PaymentAccountKind.ACCOUNT ? bankType ?? null : null,
       accountName,
       accountNumber,
-      qrCodeDataUrl: kind === PaymentAccountKind.WALLET ? qrCodeDataUrl ?? null : null,
+      qrCodeDataUrl: null,
+      qrCodePath: savedQrPath,
       isActive: dto.isActive ?? true,
     });
 
     return this.paymentAccountsRepository.save(account);
+  }
+
+  async getPaymentAccountQrFile(accountId: string) {
+    const account = await this.paymentAccountsRepository.findOne({
+      where: { id: accountId },
+    });
+    if (!account) {
+      throw new NotFoundException('Payment account not found');
+    }
+
+    const relativePath = account.qrCodePath?.trim();
+    if (!relativePath) {
+      throw new NotFoundException('QR code not found');
+    }
+
+    const resolvedPath = path.resolve(this.paymentQrStorageDir, relativePath);
+    if (!resolvedPath.startsWith(path.resolve(this.paymentQrStorageDir))) {
+      throw new BadRequestException('Invalid QR code path');
+    }
+
+    try {
+      await fs.access(resolvedPath);
+    } catch {
+      throw new NotFoundException('QR code not found');
+    }
+    return {
+      absolutePath: resolvedPath,
+      fileName: path.basename(resolvedPath),
+      contentType: this.detectImageContentType(resolvedPath),
+    };
+  }
+
+  private resolveQrCodeUrl(account: PaymentAccount, baseUrl?: string) {
+    const hasFileQr = Boolean(account.qrCodePath?.trim());
+    if (hasFileQr) {
+      const raw = process.env.APP_PUBLIC_BASE_URL?.trim() || baseUrl?.trim() || '';
+      const normalizedBase = raw ? raw.replace(/\/$/, '') : '';
+      if (!normalizedBase) return null;
+      return `${normalizedBase}/billing/payment-accounts/${account.id}/qr`;
+    }
+
+    return account.qrCodeDataUrl ?? null;
+  }
+
+  private async ensureQrStorageDir() {
+    await fs.mkdir(this.paymentQrStorageDir, { recursive: true });
+  }
+
+  private async persistUploadedQrCode(file: UploadedQrFile) {
+    if (!file.mimetype.startsWith('image/')) {
+      throw new BadRequestException('QR code must be an image file');
+    }
+    await this.ensureQrStorageDir();
+    const extFromMime = file.mimetype.split('/')[1] || 'png';
+    const ext = extFromMime.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png';
+    const fileName = `${randomUUID()}.${ext}`;
+    const targetPath = path.join(this.paymentQrStorageDir, fileName);
+    await fs.writeFile(targetPath, file.buffer);
+    return fileName;
+  }
+
+  private async persistDataUrlQrCode(dataUrl: string) {
+    const matched = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!matched) {
+      throw new BadRequestException('Invalid QR code format');
+    }
+    const mime = matched[1];
+    const base64Data = matched[2];
+    const buffer = Buffer.from(base64Data, 'base64');
+    if (buffer.length === 0) {
+      throw new BadRequestException('Invalid QR code image');
+    }
+    await this.ensureQrStorageDir();
+    const ext = (mime.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png';
+    const fileName = `${randomUUID()}.${ext}`;
+    const targetPath = path.join(this.paymentQrStorageDir, fileName);
+    await fs.writeFile(targetPath, buffer);
+    return fileName;
+  }
+
+  private detectImageContentType(filePath: string) {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.png') return 'image/png';
+    if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+    if (ext === '.gif') return 'image/gif';
+    if (ext === '.webp') return 'image/webp';
+    if (ext === '.svg') return 'image/svg+xml';
+    return 'application/octet-stream';
   }
 
   async getBillingRules() {
@@ -859,6 +978,7 @@ export class BillingService {
         monthlyFee: '0.00',
         installationFee: '0.00',
         additionalFees: '0.00',
+        collectionFee: '0.00',
         discountAmount: '0.00',
         subtotalAmount: '0.00',
         plusAmount: '0.00',
@@ -986,10 +1106,10 @@ export class BillingService {
       ? this.roundTo2(this.toNumber(customer.collectionFee))
       : 0;
     const additionalFees = this.roundTo2(
-      (isFirstInvoice ? this.toNumber(customer.defaultAdditionalFees) : 0) +
-        recurringCollectionFee,
+      isFirstInvoice ? this.toNumber(customer.defaultAdditionalFees) : 0,
     );
-    const subtotalAmount = this.roundTo2(cycleFee + installationFee + additionalFees);
+    const collectionFee = this.roundTo2(recurringCollectionFee);
+    const subtotalAmount = this.roundTo2(cycleFee + installationFee + additionalFees + collectionFee);
 
     const invoice = this.billsRepository.create({
       customer,
@@ -1011,6 +1131,7 @@ export class BillingService {
       monthlyFee: cycleFee.toFixed(2),
       installationFee: installationFee.toFixed(2),
       additionalFees: additionalFees.toFixed(2),
+      collectionFee: collectionFee.toFixed(2),
       discountAmount: '0',
       subtotalAmount: subtotalAmount.toFixed(2),
       plusAmount: '0',
@@ -1093,7 +1214,8 @@ export class BillingService {
     const baseSubtotal =
       this.toNumber(invoice.monthlyFee) +
       this.toNumber(invoice.installationFee) +
-      this.toNumber(invoice.additionalFees);
+      this.toNumber(invoice.additionalFees) +
+      this.toNumber((invoice as any).collectionFee);
 
     const fixedDiscount = this.toNumber(invoice.discountAmount);
     const orderedAdjustments = [...adjustments].sort(

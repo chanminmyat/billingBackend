@@ -34,6 +34,9 @@ export class PaymentAccount {
   @Column({ type: 'text', nullable: true })
   qrCodeDataUrl?: string | null;
 
+  @Column({ type: 'text', nullable: true })
+  qrCodePath?: string | null;
+
   @Column({ default: true })
   isActive: boolean;
 

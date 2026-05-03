@@ -38,6 +38,10 @@ export class CustomersService {
 
   async createCustomer(payload: CreateCustomerDetailsDto): Promise<Customer> {
     await this.assertCustomerCodeUnique(payload.customerCode);
+    await this.assertCustomerNrcUnique({
+      personalNrc: payload.personalNrc,
+      contactNrc: payload.contactNrc,
+    });
     this.validateCustomerTypeRules(payload.customerType, payload);
 
     const { collectionFee, ...restPayload } = payload;
@@ -83,6 +87,23 @@ export class CustomersService {
       normalizedCustomerPayload.collectionFee = '0.00';
       normalizedCustomerPayload.collectorCode = null;
     }
+
+    const requestedStatus =
+      normalizedCustomerPayload.status !== undefined
+        ? String(normalizedCustomerPayload.status ?? '').trim().toLowerCase()
+        : '';
+    const currentStatus = String(customer.status ?? '').trim().toLowerCase();
+
+    if (requestedStatus && requestedStatus !== currentStatus) {
+      const hasCompletedFirstInvoice = await this.hasCompletedFirstInvoice(customer.id);
+      const isAlreadyEnabled = currentStatus === 'enable' || currentStatus === 'active';
+      if (!hasCompletedFirstInvoice && !isAlreadyEnabled) {
+        throw new BadRequestException(
+          'Customer status can be changed only after first invoice is completed',
+        );
+      }
+    }
+
     const nextPrimaryPhone =
       normalizedCustomerPayload.primaryPhone !== undefined
         ? String(normalizedCustomerPayload.primaryPhone).trim()
@@ -105,6 +126,23 @@ export class CustomersService {
         customerId,
       );
     }
+
+    const resolvedPersonalNrc =
+      normalizedCustomerPayload.personalNrc !== undefined
+        ? String(normalizedCustomerPayload.personalNrc ?? '')
+        : customer.personalNrc;
+    const resolvedContactNrc =
+      normalizedCustomerPayload.contactNrc !== undefined
+        ? String(normalizedCustomerPayload.contactNrc ?? '')
+        : customer.contactNrc;
+
+    await this.assertCustomerNrcUnique(
+      {
+        personalNrc: resolvedPersonalNrc,
+        contactNrc: resolvedContactNrc,
+      },
+      customer.id,
+    );
 
     this.validateCustomerTypeRules(
       (merged.customerType as CustomerType) ?? customer.customerType,
@@ -196,6 +234,7 @@ export class CustomersService {
         serviceStartDate?: string | null;
         contractStartDate?: string | null;
         contractEndDate?: string | null;
+        installationDate?: string | null;
         ipType: IpType;
         staticIpAddress?: string | null;
         plan?: {
@@ -262,6 +301,7 @@ export class CustomersService {
             serviceStartDate: latestSubscription.serviceStartDate ?? null,
             contractStartDate: latestSubscription.contractStartDate ?? null,
             contractEndDate: latestSubscription.contractEndDate ?? null,
+            installationDate: latestSubscription.installationDate ?? null,
             ipType: latestSubscription.ipType,
             staticIpAddress: latestSubscription.staticIpAddress ?? null,
               plan: latestSubscription.plan
@@ -332,6 +372,11 @@ export class CustomersService {
     dto: CustomerIntakeDto,
     customerCode: string,
   ): Promise<Customer> {
+    await this.assertCustomerNrcUnique({
+      personalNrc: dto.personalInformation?.nrc,
+      contactNrc: dto.businessInformation?.contactNrc,
+    });
+
     this.validateCustomerTypeRules(dto.customerType, {
       personalName: dto.personalInformation?.name ?? null,
       personalNrc: dto.personalInformation?.nrc ?? null,
@@ -482,7 +527,7 @@ export class CustomersService {
     const collectionFee = collectionServiceEnabled
       ? this.toNumber(dto.billingInformation.collectionFee ?? 0)
       : 0;
-    const additionalFees = baseAdditionalFees + collectionFee;
+    const additionalFees = baseAdditionalFees;
     const discountAmount = dto.billingInformation.discountAmount ?? 0;
     const rawCustomMonths = Number.parseInt(
       String(dto.billingInformation.customBillingMonths ?? ''),
@@ -541,7 +586,7 @@ export class CustomersService {
       dueDateValue = this.addDays(baseDate, 7);
     }
 
-    const subtotalAmount = monthlyFee + installationFee + additionalFees;
+    const subtotalAmount = monthlyFee + installationFee + additionalFees + collectionFee;
     const plusAmount = 0;
     const minusAmount = discountAmount;
     const totalAmount = subtotalAmount + plusAmount - minusAmount;
@@ -580,6 +625,7 @@ export class CustomersService {
       monthlyFee: monthlyFee.toFixed(2),
       installationFee: installationFee.toFixed(2),
       additionalFees: additionalFees.toFixed(2),
+      collectionFee: collectionFee.toFixed(2),
       discountAmount: discountAmount.toFixed(2),
       subtotalAmount: subtotalAmount.toFixed(2),
       plusAmount: plusAmount.toFixed(2),
@@ -824,6 +870,51 @@ export class CustomersService {
     if (existing && existing.id !== ignoreId) {
       throw new BadRequestException('Customer code already exists');
     }
+  }
+
+  private async assertCustomerNrcUnique(
+    values: { personalNrc?: string | null; contactNrc?: string | null },
+    ignoreCustomerId?: string,
+  ) {
+    const normalizedPersonalNrc = this.normalizeOptionalString(values.personalNrc) ?? null;
+    const normalizedContactNrc = this.normalizeOptionalString(values.contactNrc) ?? null;
+
+    const nrcValues = [normalizedPersonalNrc, normalizedContactNrc].filter(
+      (value): value is string => !!value,
+    );
+
+    if (!nrcValues.length) {
+      return;
+    }
+
+    const query = this.customersRepository
+      .createQueryBuilder('customer')
+      .where('(customer.personalNrc IN (:...nrcValues) OR customer.contactNrc IN (:...nrcValues))', {
+        nrcValues,
+      });
+
+    if (ignoreCustomerId) {
+      query.andWhere('customer.id != :ignoreCustomerId', { ignoreCustomerId });
+    }
+
+    const duplicate = await query.select('customer.id').getOne();
+
+    if (duplicate) {
+      throw new BadRequestException('NRC already exists');
+    }
+  }
+
+
+  private async hasCompletedFirstInvoice(customerId: string): Promise<boolean> {
+    const paidBill = await this.billsRepository
+      .createQueryBuilder('bill')
+      .select('bill.id', 'id')
+      .where('bill.customer_id = :customerId', { customerId })
+      .andWhere("LOWER(TRIM(bill.status)) = 'paid'")
+      .limit(1)
+      .getRawOne<{ id?: string }>();
+
+    return Boolean(paidBill?.id);
   }
 
   private validateCustomerTypeRules(
