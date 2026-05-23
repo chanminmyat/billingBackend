@@ -1455,15 +1455,16 @@ export class BillingService {
 
     const normalizedMode = String(firstInvoiceMode ?? '').trim().toLowerCase();
     if (normalizedMode === 'fixed') {
-      const targetDay = Number.parseInt(String(fixedStartDay ?? ''), 10);
-      const day = Number.isFinite(targetDay) && targetDay >= 1 && targetDay <= 31 ? targetDay : 1;
       const anchorStart = new Date(
         fallbackDate.getFullYear(),
         fallbackDate.getMonth(),
         fallbackDate.getDate(),
       );
-      const nextCycleStart = this.getNextFixedCycleStartDate(anchorStart, day);
-      const fixedFirstEnd = this.addDays(nextCycleStart, -1);
+      const fixedFirstEnd = new Date(
+        anchorStart.getFullYear(),
+        anchorStart.getMonth() + 1,
+        0,
+      );
       return {
         from: this.toDateString(anchorStart),
         to: this.toDateString(fixedFirstEnd),
