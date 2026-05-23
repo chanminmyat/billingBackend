@@ -25,8 +25,12 @@ import { UsersModule } from './users/users.module';
         const sslEnabled =
           config.get<string>('DB_SSL', 'false').toLowerCase() === 'true';
         const forceSslForUrl = Boolean(databaseUrl);
-        const isSupabase = Boolean(databaseUrl?.includes('supabase.co'));
-        const shouldSync = config.get<string>('NODE_ENV') !== 'production' || isSupabase;
+        const isProduction = config.get<string>('NODE_ENV') === 'production';
+        const syncFromEnv = config.get<string>('DB_SYNCHRONIZE');
+        const shouldSync =
+          syncFromEnv !== undefined
+            ? syncFromEnv.toLowerCase() === 'true'
+            : !isProduction;
 
         return {
           type: 'postgres',
@@ -45,7 +49,7 @@ import { UsersModule } from './users/users.module';
             ? undefined
             : config.get<string>('DB_NAME', 'billing'),
           autoLoadEntities: true,
-          schema: isSupabase ? 'public' : undefined,
+          schema: 'public',
           synchronize: shouldSync,
           ssl: sslEnabled || forceSslForUrl
             ? {

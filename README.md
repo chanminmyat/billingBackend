@@ -85,30 +85,30 @@ Swagger UI is live at [`/docs`](http://localhost:4000/docs) once the server is r
 - `yarn test` – Execute unit tests (none yet for this module)
 - `yarn lint` – ESLint + Prettier
 
-## Deploy on Render
+## Deploy on Railway
 
 1. Push this repo to GitHub.
-2. Create a Render **Web Service** (Node).
-3. Build command:
+2. Create a new Railway project and add:
+   - your backend service from GitHub repo
+   - a PostgreSQL service
+3. In backend service settings, use:
+   - Build command: `npm install && npm run build`
+   - Start command: `npm run start:prod`
+4. Add environment variables in backend service:
    ```
-   yarn install && yarn build
-   ```
-4. Start command:
-   ```
-   node dist/main.js
-   ```
-5. Add environment variables:
-   ```
-   DATABASE_URL=postgresql://postgres:<PASSWORD>@db.<project-ref>.supabase.co:5432/postgres?sslmode=require
+   DATABASE_URL=<Railway Postgres connection URL>
    DB_SSL=true
+   DB_SYNCHRONIZE=false
    NODE_ENV=production
-   PORT=10000
+   PORT=4000
+   APP_TIMEZONE=Asia/Yangon
+   CORS_ALLOWED_ORIGINS=https://billcollection.vercel.app
    ```
-6. CORS is already configured for:
-   - `http://localhost:3000`
-   - `https://billcollection.vercel.app`
+5. Attach a public domain from Railway and use that URL in frontend `NEXT_PUBLIC_API_BASE_URL`.
 
-Render will assign a public URL like `https://your-service.onrender.com`.
+Notes:
+- `DB_SYNCHRONIZE=false` is recommended in production.
+- Use migrations for schema changes in production databases.
 
 ## Testing Notes
 
