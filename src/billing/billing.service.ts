@@ -78,6 +78,12 @@ export class BillingService {
     'payment-account-qr',
   );
 
+  private readonly paymentSlipStorageDir = path.join(
+    process.cwd(),
+    'storage',
+    'payment-slips',
+  );
+
   async getPaymentAccounts(activeOnly = false, baseUrl?: string) {
     const accounts = await this.paymentAccountsRepository.find({
       where: activeOnly ? { isActive: true } : undefined,
@@ -857,6 +863,8 @@ export class BillingService {
   async updateInvoiceCollectionWorkflow(
     invoiceId: string,
     dto: UpdateInvoiceCollectionDto,
+    paymentSlipFile?: UploadedQrFile,
+    baseUrl?: string,
   ) {
     const invoice = await this.billsRepository.findOne({
       where: { id: invoiceId },
@@ -876,14 +884,23 @@ export class BillingService {
 
     const eventTimestamp = this.resolveCollectionEventTimestamp(dto.timestamp);
     const collectionEvents = this.getCollectionEvents(invoice);
+    let paymentSlipPath: string | undefined;
+    if (paymentSlipFile) {
+      paymentSlipPath = await this.persistUploadedPaymentSlip(paymentSlipFile);
+    }
+    const eventId = this.generateCollectionEventId(eventTimestamp);
     collectionEvents.push({
-      id: this.generateCollectionEventId(eventTimestamp),
+      id: eventId,
       type: dto.type,
       label: dto.label.trim(),
       note: dto.note?.trim() || undefined,
       timestamp: eventTimestamp,
       actorName: dto.actorName?.trim() || undefined,
       actorRole: dto.actorRole?.trim() || undefined,
+      paymentSlipPath,
+      paymentSlipUrl: paymentSlipPath
+        ? this.resolveInvoicePaymentSlipUrl(invoice.id, eventId, baseUrl)
+        : undefined,
     });
 
     invoice.collectionStatus = dto.status;
@@ -1696,6 +1713,8 @@ export class BillingService {
         timestamp: String(event.timestamp ?? new Date().toISOString()),
         actorName: event.actorName ?? undefined,
         actorRole: event.actorRole ?? undefined,
+        paymentSlipPath: (event as InvoiceCollectionEvent).paymentSlipPath ?? undefined,
+        paymentSlipUrl: (event as InvoiceCollectionEvent).paymentSlipUrl ?? undefined,
       }));
   }
 
@@ -1754,6 +1773,71 @@ export class BillingService {
     }
 
     return null;
+  }
+
+
+  private async ensurePaymentSlipStorageDir() {
+    await fs.mkdir(this.paymentSlipStorageDir, { recursive: true });
+  }
+
+  private async persistUploadedPaymentSlip(file: UploadedQrFile) {
+    if (!file.mimetype.startsWith('image/')) {
+      throw new BadRequestException('Payment slip must be an image file');
+    }
+    await this.ensurePaymentSlipStorageDir();
+    const extFromMime = file.mimetype.split('/')[1] || 'png';
+    const ext = extFromMime.replace(/[^a-z0-9]/gi, '').toLowerCase() || 'png';
+    const fileName = `${randomUUID()}.${ext}`;
+    const targetPath = path.join(this.paymentSlipStorageDir, fileName);
+    await fs.writeFile(targetPath, file.buffer);
+    return fileName;
+  }
+
+  private resolveInvoicePaymentSlipUrl(invoiceId: string, eventId: string, baseUrl?: string) {
+    const raw = process.env.APP_PUBLIC_BASE_URL?.trim() || baseUrl?.trim() || '';
+    const normalizedBase = raw ? raw.replace(/\/$/, '') : '';
+    if (!normalizedBase) return null;
+    return `${normalizedBase}/billing/invoices/${invoiceId}/payment-slip?eventId=${encodeURIComponent(eventId)}`;
+  }
+
+  async getInvoicePaymentSlipFile(invoiceId: string, eventId?: string) {
+    const invoice = await this.billsRepository.findOne({ where: { id: invoiceId } });
+    if (!invoice) {
+      throw new NotFoundException('Invoice not found');
+    }
+
+    const events = this.getCollectionEvents(invoice);
+    const sortedEvents = events.slice().sort((a, b) => {
+      const aTime = new Date(a.timestamp).getTime();
+      const bTime = new Date(b.timestamp).getTime();
+      return bTime - aTime;
+    });
+
+    const matchedEvent = eventId
+      ? sortedEvents.find((event) => event.id === eventId)
+      : sortedEvents.find((event) => Boolean(event.paymentSlipPath));
+
+    const relativePath = matchedEvent?.paymentSlipPath?.trim();
+    if (!relativePath) {
+      throw new NotFoundException('Payment slip not found');
+    }
+
+    const resolvedPath = path.resolve(this.paymentSlipStorageDir, relativePath);
+    if (!resolvedPath.startsWith(path.resolve(this.paymentSlipStorageDir))) {
+      throw new BadRequestException('Invalid payment slip path');
+    }
+
+    try {
+      await fs.access(resolvedPath);
+    } catch {
+      throw new NotFoundException('Payment slip not found');
+    }
+
+    return {
+      absolutePath: resolvedPath,
+      fileName: path.basename(resolvedPath),
+      contentType: this.detectImageContentType(resolvedPath),
+    };
   }
 
   private toNumber(

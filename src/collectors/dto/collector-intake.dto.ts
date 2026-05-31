@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsOptional, IsString } from 'class-validator';
+import { IsArray, IsEmail, IsOptional, IsString } from 'class-validator';
 
 export class CollectorIntakeDto {
   @ApiProperty({ example: 'May Hanna' })
@@ -17,6 +17,12 @@ export class CollectorIntakeDto {
   @ApiProperty({ example: 'Pauk' })
   @IsString()
   area: string;
+
+  @ApiProperty({ type: [String], required: false, example: ['Pauk', 'Pakokku'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  assignedAreas?: string[];
 
   @ApiProperty({ enum: ['enable', 'disable'], example: 'enable' })
   @IsString()

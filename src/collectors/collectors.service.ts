@@ -20,6 +20,12 @@ export class CollectorsService {
     user: User,
     payload: UpsertCollectorProfileDto,
   ): Promise<CollectorProfile> {
+    const normalizedPayload: UpsertCollectorProfileDto = {
+      ...payload,
+      ...(payload.assignedAreas !== undefined
+        ? { assignedAreas: this.normalizeAssignedAreas(payload.assignedAreas) }
+        : {}),
+    };
     let profile = await this.collectorsRepository.findOne({
       where: { user: { id: user.id } },
       relations: { user: true },
@@ -27,11 +33,11 @@ export class CollectorsService {
 
     if (!profile) {
       profile = this.collectorsRepository.create({
-        ...payload,
+        ...normalizedPayload,
         user,
       });
     } else {
-      this.collectorsRepository.merge(profile, payload);
+      this.collectorsRepository.merge(profile, normalizedPayload);
     }
 
     return this.collectorsRepository.save(profile);
@@ -71,6 +77,7 @@ export class CollectorsService {
       collectorCode,
       address: payload.address,
       area: payload.area,
+      assignedAreas: this.normalizeAssignedAreas(payload.assignedAreas),
       nrc: normalizedNrc,
       language: payload.language?.trim().toLowerCase(),
       status: payload.status,
@@ -114,6 +121,10 @@ export class CollectorsService {
 
     if (payload.area) {
       collector.area = payload.area.trim();
+    }
+
+    if (payload.assignedAreas !== undefined) {
+      collector.assignedAreas = this.normalizeAssignedAreas(payload.assignedAreas);
     }
 
     if (payload.status) {
@@ -160,5 +171,13 @@ export class CollectorsService {
     if (existing && existing.id !== ignoreCollectorId) {
       throw new BadRequestException('NRC already exists');
     }
+  }
+
+  private normalizeAssignedAreas(input?: string[] | null): string[] {
+    if (!Array.isArray(input)) return [];
+    const normalized = input
+      .map((item) => String(item ?? '').trim())
+      .filter(Boolean);
+    return Array.from(new Set(normalized));
   }
 }

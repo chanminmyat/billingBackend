@@ -178,11 +178,28 @@ export class BillingController {
 
   @Post('invoices/:id/collection-workflow')
   @ApiOperation({ summary: 'Update invoice collection workflow status and append timeline event' })
+  @UseInterceptors(FileInterceptor('paymentSlip'))
   updateCollectionWorkflow(
     @Param('id') id: string,
     @Body() dto: UpdateInvoiceCollectionDto,
+    @UploadedFile() paymentSlipFile?: { mimetype: string; buffer: Buffer },
+    @Req() request?: Request,
   ) {
-    return this.billingService.updateInvoiceCollectionWorkflow(id, dto);
+    const baseUrl = request ? `${request.protocol}://${request.get('host')}` : undefined;
+    return this.billingService.updateInvoiceCollectionWorkflow(id, dto, paymentSlipFile, baseUrl);
+  }
+
+  @Get('invoices/:id/payment-slip')
+  @ApiOperation({ summary: 'Get invoice payment slip image' })
+  async getInvoicePaymentSlip(
+    @Param('id') id: string,
+    @Query('eventId') eventId: string | undefined,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const fileData = await this.billingService.getInvoicePaymentSlipFile(id, eventId);
+    res.setHeader('Content-Type', fileData.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return new StreamableFile(createReadStream(fileData.absolutePath));
   }
 
   @Post('customers/:customerId/invoices/generate')

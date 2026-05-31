@@ -39,6 +39,8 @@ export type InvoiceCollectionEvent = {
   timestamp: string;
   actorName?: string;
   actorRole?: string;
+  paymentSlipPath?: string;
+  paymentSlipUrl?: string | null;
 };
 
 @Entity({ name: 'bills' })

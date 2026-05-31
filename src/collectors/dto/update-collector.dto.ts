@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString } from 'class-validator';
+import { IsArray, IsOptional, IsString } from 'class-validator';
 
 export class UpdateCollectorDto {
   @ApiPropertyOptional({ example: 'May Hanna' })
@@ -21,6 +21,12 @@ export class UpdateCollectorDto {
   @IsOptional()
   @IsString()
   area?: string;
+
+  @ApiPropertyOptional({ type: [String], example: ['Pauk', 'Pakokku'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  assignedAreas?: string[];
 
   @ApiPropertyOptional({ example: 'enable' })
   @IsOptional()

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsArray, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpsertCollectorProfileDto {
   @ApiPropertyOptional({ example: 'COL-001', maxLength: 50 })
@@ -28,6 +28,12 @@ export class UpsertCollectorProfileDto {
   @IsString()
   @MaxLength(120)
   region?: string;
+
+  @ApiPropertyOptional({ type: [String], example: ['Downtown', 'Hlaing'] })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  assignedAreas?: string[];
 
   @ApiPropertyOptional({ example: 'Downtown Route', maxLength: 120 })
   @IsOptional()

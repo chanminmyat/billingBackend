@@ -26,6 +26,9 @@ export class CollectorProfile {
   @Column({ length: 120, nullable: true })
   area?: string | null;
 
+  @Column('simple-array', { nullable: true })
+  assignedAreas?: string[] | null;
+
   @Column({ length: 120, nullable: true })
   region?: string | null;
 
