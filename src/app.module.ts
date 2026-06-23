@@ -12,6 +12,7 @@ import { PlansModule } from './plans/plans.module';
 import { SubscriptionNetworksModule } from './subscription-networks/subscription-networks.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { UsersModule } from './users/users.module';
+import { TechnicianApiModule } from './technician-api/technician-api.module';
 
 @Module({
   imports: [
@@ -68,6 +69,7 @@ import { UsersModule } from './users/users.module';
     SubscriptionNetworksModule,
     BillingModule,
     AuthModule,
+    TechnicianApiModule,
   ],
   controllers: [AppController],
   providers: [AppService],

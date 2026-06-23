@@ -391,20 +391,23 @@ export class CustomersService {
     const collectionFee = collectionServiceEnabled
       ? this.roundTo2(this.toNumber(dto.billingInformation?.collectionFee ?? 0))
       : 0;
-    const normalizedBillingRuleId = this.normalizeOptionalString(dto.billingRuleId) ?? null;
-    let billingRuleId: string | null = null;
-    let billingRuleName: string | null = null;
-
-    if (normalizedBillingRuleId) {
-      const matchedRule = await this.billingRulesRepository.findOne({
-        where: { id: normalizedBillingRuleId },
-      });
-      if (!matchedRule) {
-        throw new BadRequestException('Billing rule not found');
-      }
-      billingRuleId = matchedRule.id;
-      billingRuleName = matchedRule.name;
+    const normalizedBillingRuleId = this.normalizeOptionalString(dto.billingRuleId);
+    if (!normalizedBillingRuleId) {
+      throw new BadRequestException('Billing rule is required');
     }
+
+    const matchedRule = await this.billingRulesRepository.findOne({
+      where: { id: normalizedBillingRuleId },
+    });
+    if (!matchedRule) {
+      throw new BadRequestException('Billing rule not found');
+    }
+    if (matchedRule.isActive === false) {
+      throw new BadRequestException('Billing rule is inactive');
+    }
+
+    const billingRuleId: string | null = matchedRule.id;
+    const billingRuleName: string | null = matchedRule.name;
 
     const customer = this.customersRepository.create({
       customerCode,

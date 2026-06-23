@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import { InjectRepository } from '@nestjs/typeorm';
-import { IsNull, Not, Repository } from 'typeorm';
+import { ILike, IsNull, Not, Repository } from 'typeorm';
 import { UserStatus } from '../common/enums/user-status.enum';
 import { CustomerStatus } from '../common/enums/customer-status.enum';
 import { BillingCycle } from '../common/enums/billing-cycle.enum';
@@ -241,14 +241,52 @@ export class BillingService {
     return 'application/octet-stream';
   }
 
+  private normalizeBillingModel(
+    billingModel?: string | null,
+    prepaidPostpaid?: string | null,
+  ): 'recurring' | 'usage' | 'prepaid' | 'postpaid' {
+    const normalizedModel = String(billingModel ?? '').trim().toLowerCase();
+    if (normalizedModel === 'usage') return 'usage';
+    if (normalizedModel === 'prepaid') return 'prepaid';
+    if (normalizedModel === 'postpaid') return 'postpaid';
+    if (normalizedModel === 'recurring') return 'recurring';
+
+    const normalizedPaymentMode = String(prepaidPostpaid ?? '').trim().toLowerCase();
+    if (normalizedPaymentMode === 'prepaid') return 'prepaid';
+    if (normalizedPaymentMode === 'postpaid') return 'postpaid';
+    return 'recurring';
+  }
+
+  private normalizePrepaidPostpaid(value?: string | null) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    return normalized === 'prepaid' ? 'prepaid' : 'postpaid';
+  }
+
+  private mapBillingRuleForOutput<
+    T extends { billingModel?: string | null; prepaidPostpaid?: string | null }
+  >(rule: T): T & {
+    billingModel: 'recurring' | 'usage' | 'prepaid' | 'postpaid';
+    prepaidPostpaid: 'prepaid' | 'postpaid';
+  } {
+    const normalizedModel = this.normalizeBillingModel(rule.billingModel, rule.prepaidPostpaid);
+    const normalizedPaymentMode =
+      normalizedModel === 'prepaid' ? 'prepaid' : this.normalizePrepaidPostpaid(rule.prepaidPostpaid);
+    return {
+      ...rule,
+      billingModel: normalizedModel,
+      prepaidPostpaid: normalizedPaymentMode,
+    };
+  }
+
   async getBillingRules() {
-    return this.billingRulesRepository.find({
+    const rules = await this.billingRulesRepository.find({
       order: {
         isActive: 'DESC',
         updatedAt: 'DESC',
         createdAt: 'DESC',
       },
     });
+    return rules.map((rule) => this.mapBillingRuleForOutput(rule));
   }
 
   async createBillingRule(dto: CreateBillingRuleDto) {
@@ -269,7 +307,7 @@ export class BillingService {
 
     const rule = this.billingRulesRepository.create({
       name,
-      billingModel: dto.billingModel ?? 'recurring',
+      billingModel: this.normalizeBillingModel(dto.billingModel, dto.prepaidPostpaid),
       billingType: dto.billingType ?? 'fixed',
       billingMode: normalizedMode,
       customMonths,
@@ -278,7 +316,7 @@ export class BillingService {
           ? this.normalizePositiveInt(dto.fixedBillingDay, 1)
           : null,
       dueAfterDays: this.normalizeNonNegativeInt(dto.dueAfterDays, 14),
-      prepaidPostpaid: dto.prepaidPostpaid ?? 'postpaid',
+      prepaidPostpaid: this.normalizePrepaidPostpaid(dto.prepaidPostpaid ?? dto.billingModel),
       suspendOnOverdue: dto.suspendOnOverdue ?? true,
       graceDays: this.normalizeNonNegativeInt(dto.graceDays, 0),
       lateFeeEnabled: dto.lateFeeEnabled ?? false,
@@ -290,7 +328,8 @@ export class BillingService {
       version: 1,
     });
 
-    return this.billingRulesRepository.save(rule);
+    const savedRule = await this.billingRulesRepository.save(rule);
+    return this.mapBillingRuleForOutput(savedRule);
   }
 
   async updateBillingRule(ruleId: string, dto: UpdateBillingRuleDto) {
@@ -307,8 +346,15 @@ export class BillingService {
       rule.name = normalizedName;
     }
 
-    if (dto.billingModel !== undefined) {
-      rule.billingModel = dto.billingModel;
+    if (dto.billingModel !== undefined || dto.prepaidPostpaid !== undefined) {
+      const normalizedModel = this.normalizeBillingModel(
+        dto.billingModel ?? rule.billingModel,
+        dto.prepaidPostpaid ?? rule.prepaidPostpaid,
+      );
+      rule.billingModel = normalizedModel;
+      rule.prepaidPostpaid = this.normalizePrepaidPostpaid(
+        dto.prepaidPostpaid ?? (normalizedModel === 'prepaid' ? 'prepaid' : rule.prepaidPostpaid),
+      );
     }
 
     if (dto.billingType !== undefined) {
@@ -335,9 +381,6 @@ export class BillingService {
     }
     if (dto.dueAfterDays !== undefined) {
       rule.dueAfterDays = this.normalizeNonNegativeInt(dto.dueAfterDays, 14);
-    }
-    if (dto.prepaidPostpaid !== undefined) {
-      rule.prepaidPostpaid = dto.prepaidPostpaid;
     }
     if (dto.suspendOnOverdue !== undefined) {
       rule.suspendOnOverdue = dto.suspendOnOverdue;
@@ -366,7 +409,8 @@ export class BillingService {
 
     rule.version = (rule.version ?? 1) + 1;
 
-    return this.billingRulesRepository.save(rule);
+    const savedRule = await this.billingRulesRepository.save(rule);
+    return this.mapBillingRuleForOutput(savedRule);
   }
 
   async assignRuleToCustomers(pathRuleId: string | undefined, dto: AssignBillingRuleCustomersDto) {
@@ -463,6 +507,32 @@ export class BillingService {
   }
 
   async getInvoices(customerId?: string) {
+    const initialInvoices = await this.billsRepository.find({
+      where: customerId ? ({ customer: { id: customerId } } as never) : undefined,
+      relations: {
+        customer: true,
+        subscription: {
+          plan: true,
+        },
+        adjustments: true,
+      },
+      order: {
+        issuedAt: 'DESC',
+      },
+    });
+
+    const customerIds = Array.from(
+      new Set(
+        initialInvoices
+          .map((invoice) => String(invoice.customer?.id ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    for (const customerIdToSync of customerIds) {
+      await this.syncCustomerServiceStatus(customerIdToSync);
+    }
+
     return this.billsRepository.find({
       where: customerId ? ({ customer: { id: customerId } } as never) : undefined,
       relations: {
@@ -518,6 +588,10 @@ export class BillingService {
     const receiptStatus = String(invoice.receiptStatus ?? '').trim().toLowerCase();
     const hasReceiptNo = Boolean(invoice.receiptNo?.trim());
     const isCancelledReceiptState = receiptStatus === 'cancelled' || (invoiceStatus === 'cancelled' && hasReceiptNo);
+
+    if (invoiceStatus === 'carried_forward') {
+      throw new BadRequestException('Carried-forward invoice cannot generate receipt');
+    }
 
     if (invoiceStatus === 'cancelled' && !isCancelledReceiptState) {
       throw new BadRequestException('Cancelled invoice cannot generate receipt');
@@ -966,10 +1040,15 @@ export class BillingService {
       throw new BadRequestException('Customer has no active subscription plan');
     }
 
-    const latestInvoice = await this.billsRepository.findOne({
-      where: { customer: { id: customerId }, status: Not('cancelled') },
+    const invoiceHistory = await this.billsRepository.find({
+      where: { customer: { id: customerId } },
       order: { issuedAt: 'DESC' },
     });
+    const latestInvoice =
+      invoiceHistory.find((invoiceCandidate) => {
+        const normalizedStatus = this.normalizeInvoiceOperationalStatus(invoiceCandidate.status);
+        return normalizedStatus !== 'cancelled' && normalizedStatus !== 'carried_forward';
+      }) ?? null;
     const isManualOneTime = options?.manualOneTime === true;
     const now = new Date();
     const invoiceDateText = this.toDateString(now);
@@ -1010,6 +1089,20 @@ export class BillingService {
 
       const savedManualInvoice = await this.billsRepository.save(invoice);
       return this.getInvoiceById(savedManualInvoice.id);
+    }
+
+    const latestInvoiceHasCarriedForwardBalance = latestInvoice
+      ? await this.invoiceHasCarriedForwardBalance(latestInvoice.id)
+      : false;
+
+    if (
+      latestInvoice &&
+      latestInvoiceHasCarriedForwardBalance &&
+      !this.isInvoiceClosedStatus(latestInvoice.status)
+    ) {
+      throw new BadRequestException(
+        'Latest carried-forward invoice must be paid before generating the next invoice',
+      );
     }
 
     const requestedRuleId = (
@@ -1116,6 +1209,20 @@ export class BillingService {
       : shouldUseFullMonthFirstFixedInvoice
         ? this.roundTo2(monthlyFee)
         : this.roundTo2(monthlyFee * cycleMonths);
+    const openCarryForwardInvoices = await this.billsRepository.find({
+      where: { customer: { id: customerId } },
+      relations: {
+        customer: true,
+      },
+      order: {
+        issuedAt: 'ASC',
+      },
+    });
+    const carryForwardInvoices = openCarryForwardInvoices.filter((invoiceCandidate) => {
+      if (!invoiceCandidate.id || invoiceCandidate.id === replaceInvoiceId) return false;
+      const normalizedStatus = this.normalizeInvoiceOperationalStatus(invoiceCandidate.status);
+      return normalizedStatus === 'unpaid' || normalizedStatus === 'overdue';
+    });
     const installationFee = isFirstInvoice
       ? this.roundTo2(this.toNumber(customer.defaultInstallationFee))
       : 0;
@@ -1163,11 +1270,50 @@ export class BillingService {
 
     const savedInvoice = await this.billsRepository.save(invoice);
 
-    return this.applyAutomaticAdjustmentsToInvoice(savedInvoice.id);
+    const carryForwardAdjustments: InvoiceAdjustmentInputDto[] = carryForwardInvoices.map((carriedInvoice, index) => ({
+      description: `Previous unpaid balance - ${carriedInvoice.invoiceNo ?? carriedInvoice.id}`,
+      type: AdjustmentType.PLUS,
+      valueType: AdjustmentValueType.FIXED,
+      value: this.roundTo2(this.toNumber(carriedInvoice.totalAmount)),
+      rememberForNext: false,
+      sortOrder: 10_000 + index,
+    }));
+
+    const nextInvoice = await this.applyAutomaticAdjustmentsToInvoice(
+      savedInvoice.id,
+      carryForwardAdjustments,
+    );
+
+    if (carryForwardInvoices.length > 0) {
+      const carryEventTimestamp = new Date().toISOString();
+      for (const carriedInvoice of carryForwardInvoices) {
+        carriedInvoice.status = 'carried_forward';
+        carriedInvoice.collectionEvents = [
+          ...this.getCollectionEvents(carriedInvoice),
+          {
+            id: this.generateCollectionEventId(carryEventTimestamp),
+            type: 'admin_confirmed',
+            label: `Balance carried forward to ${nextInvoice.invoiceNo ?? savedInvoice.invoiceNo ?? savedInvoice.id}.`,
+            note: `Carried amount: ${this.roundTo2(this.toNumber(carriedInvoice.totalAmount)).toFixed(2)} ${carriedInvoice.currency ?? savedInvoice.currency ?? 'MMK'}`,
+            timestamp: carryEventTimestamp,
+            actorName: 'system',
+            actorRole: 'system',
+          },
+        ];
+      }
+      await this.billsRepository.save(carryForwardInvoices);
+    }
+
+    await this.syncCustomerServiceStatus(customer.id);
+
+    return this.getInvoiceById(savedInvoice.id);
   }
 
 
-  async applyAutomaticAdjustmentsToInvoice(invoiceId: string) {
+  async applyAutomaticAdjustmentsToInvoice(
+    invoiceId: string,
+    extraAdjustments: InvoiceAdjustmentInputDto[] = [],
+  ) {
     const invoice = await this.billsRepository.findOne({
       where: { id: invoiceId },
       relations: {
@@ -1212,7 +1358,7 @@ export class BillingService {
       }),
     );
 
-    const autoAdjustments = [...globalDtos, ...recurringDtos].sort(
+    const autoAdjustments = [...globalDtos, ...recurringDtos, ...extraAdjustments].sort(
       (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),
     );
 
@@ -1646,7 +1792,10 @@ export class BillingService {
   }
 
   private toDateString(value: Date): string {
-    return value.toISOString().slice(0, 10);
+    const year = value.getFullYear();
+    const month = String(value.getMonth() + 1).padStart(2, '0');
+    const day = String(value.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
   }
 
   private addDays(value: Date, days: number): Date {
@@ -1729,13 +1878,116 @@ export class BillingService {
     return `${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
   }
 
+  private async invoiceHasCarriedForwardBalance(invoiceId?: string | null) {
+    const normalizedInvoiceId = String(invoiceId ?? '').trim();
+    if (!normalizedInvoiceId) return false;
+
+    const count = await this.billAdjustmentsRepository.count({
+      where: {
+        bill: { id: normalizedInvoiceId },
+        type: AdjustmentType.PLUS,
+        description: ILike('Previous unpaid balance%'),
+      },
+    });
+
+    return count > 0;
+  }
+
+  private normalizeInvoiceOperationalStatus(status?: string | null) {
+    const normalized = String(status ?? '').trim().toLowerCase();
+    if (normalized === 'canceled') return 'cancelled';
+    if (normalized === 'over_due') return 'overdue';
+    return normalized;
+  }
+
+  private isInvoiceClosedStatus(status?: string | null) {
+    const normalized = this.normalizeInvoiceOperationalStatus(status);
+    return normalized === 'paid' || normalized === 'cancelled' || normalized === 'carried_forward';
+  }
+
+  private async syncCustomerServiceStatus(customerId?: string | null) {
+    const normalizedCustomerId = String(customerId ?? '').trim();
+    if (!normalizedCustomerId) return;
+
+    const customer = await this.customersRepository.findOne({
+      where: { id: normalizedCustomerId },
+    });
+    if (!customer) return;
+
+    const invoices = await this.billsRepository.find({
+      where: { customer: { id: normalizedCustomerId } },
+      relations: {
+        adjustments: true,
+      },
+    });
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const invoicesToSave: Bill[] = [];
+    let shouldDisableCustomer = false;
+
+    for (const invoice of invoices) {
+      const normalizedStatus = this.normalizeInvoiceOperationalStatus(invoice.status);
+      if (this.isInvoiceClosedStatus(normalizedStatus)) {
+        continue;
+      }
+
+      const hasPreviousBalance = Array.isArray(invoice.adjustments)
+        && invoice.adjustments.some((adjustment) =>
+          String(adjustment.description ?? '').trim().toLowerCase().startsWith('previous unpaid balance'),
+        );
+      const dueDate = this.parseDateOnly(invoice.dueDate || '');
+      const dueDay = dueDate
+        ? new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate())
+        : null;
+      const isPastDue = Boolean(dueDay && dueDay.getTime() < today.getTime());
+
+      if (normalizedStatus === 'unpaid' && isPastDue) {
+        invoice.status = 'overdue';
+        invoicesToSave.push(invoice);
+        shouldDisableCustomer = true;
+        continue;
+      }
+
+      if (normalizedStatus === 'unpaid' && hasPreviousBalance) {
+        shouldDisableCustomer = true;
+        continue;
+      }
+
+      if (normalizedStatus === 'overdue') {
+        if (!isPastDue && hasPreviousBalance) {
+          invoice.status = 'unpaid';
+          invoicesToSave.push(invoice);
+          shouldDisableCustomer = true;
+          continue;
+        }
+
+        shouldDisableCustomer = true;
+      }
+    }
+
+    if (invoicesToSave.length > 0) {
+      await this.billsRepository.save(invoicesToSave);
+    }
+
+    if (customer.status !== CustomerStatus.TAKEOFF) {
+      const nextStatus = shouldDisableCustomer
+        ? CustomerStatus.DISABLE
+        : customer.status === CustomerStatus.DISABLE
+          ? CustomerStatus.ENABLE
+          : customer.status;
+      if (nextStatus !== customer.status) {
+        customer.status = nextStatus;
+        await this.customersRepository.save(customer);
+      }
+    }
+  }
+
   private async activateCustomerAndUser(customer?: Customer | null) {
     if (!customer) return;
 
-    if (customer.status !== CustomerStatus.ENABLE) {
-      customer.status = CustomerStatus.ENABLE;
-      await this.customersRepository.save(customer);
-    }
+    await this.syncCustomerServiceStatus(customer.id);
 
     const user = await this.usersRepository.findOne({
       where: { customer: { id: customer.id } },

@@ -6,7 +6,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 
-export type BillingRuleModel = 'recurring' | 'usage';
+export type BillingRuleModel = 'recurring' | 'usage' | 'prepaid' | 'postpaid';
 export type BillingRuleType = 'fixed' | 'anniversary';
 export type BillingRuleMode = 'monthly' | 'quarterly' | 'bi_yearly' | 'yearly' | 'custom';
 export type BillingRulePrepaidMode = 'prepaid' | 'postpaid';

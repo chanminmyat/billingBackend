@@ -291,10 +291,9 @@ export class CustomerIntakeDto {
   @IsString()
   collectorCode?: string | null;
 
-  @ApiPropertyOptional({ example: '3e2f20f7-2a44-4ac7-92cc-87bfdd4f1f34' })
-  @IsOptional()
+  @ApiProperty({ example: '3e2f20f7-2a44-4ac7-92cc-87bfdd4f1f34' })
   @IsString()
-  billingRuleId?: string | null;
+  billingRuleId: string;
 
   @ApiPropertyOptional({ example: 'Monthly Default Rule' })
   @IsOptional()

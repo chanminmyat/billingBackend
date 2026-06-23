@@ -18,8 +18,8 @@ export class CreateBillingRuleDto {
 
   @ApiPropertyOptional({ example: 'recurring' })
   @IsOptional()
-  @IsIn(['recurring', 'usage'])
-  billingModel?: 'recurring' | 'usage';
+  @IsIn(['recurring', 'usage', 'prepaid', 'postpaid'])
+  billingModel?: 'recurring' | 'usage' | 'prepaid' | 'postpaid';
 
   @ApiPropertyOptional({ example: 'fixed' })
   @IsOptional()
