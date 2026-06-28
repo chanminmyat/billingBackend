@@ -79,6 +79,11 @@ export class GenerateInvoiceDto {
   @Max(365)
   dueAfterDays?: number;
 
+  @ApiPropertyOptional({ example: '2026-07-03', description: 'Explicit invoice release date (YYYY-MM-DD)' })
+  @IsOptional()
+  @IsString()
+  releaseDate?: string;
+
   @ApiPropertyOptional({ example: 1, minimum: 1, maximum: 31 })
   @IsOptional()
   @Type(() => Number)

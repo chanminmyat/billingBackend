@@ -118,6 +118,12 @@ export class BillingController {
     return this.billingService.getInvoices(customerId);
   }
 
+  @Get('engine')
+  @ApiOperation({ summary: 'Get backend-driven next invoice engine rows' })
+  getBillingEngineRows() {
+    return this.billingService.getBillingEngineRows();
+  }
+
   @Get('receipts')
   @ApiOperation({ summary: 'Get generated receipt list' })
   getReceipts() {

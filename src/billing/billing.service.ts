@@ -49,6 +49,26 @@ type UploadedQrFile = {
   buffer: Buffer;
 };
 
+type BillingEngineRow = {
+  customerId: string;
+  customerCode: string;
+  customerName: string;
+  currentInvoiceId?: string;
+  queuedInvoiceId?: string;
+  currentInvoiceNo: string;
+  currentInvoiceStatus: string;
+  billingMode: 'fixed' | 'anniversary';
+  billingCycleMode: string | null;
+  customMonths: number | null;
+  fixedBillingDay: number | null;
+  dueAfterDays: number | null;
+  ruleId: string | null;
+  ruleName: string | null;
+  releaseDate: string | null;
+  nextPaymentDate: string | null;
+  status: 'no_invoice' | 'scheduled' | 'ready_to_release' | 'releasing';
+};
+
 @Injectable()
 export class BillingService {
   constructor(
@@ -546,6 +566,269 @@ export class BillingService {
         issuedAt: 'DESC',
       },
     });
+  }
+
+
+  async getBillingEngineRows(): Promise<BillingEngineRow[]> {
+    const [customers, invoices, rules] = await Promise.all([
+      this.customersRepository.find({
+        order: {
+          personalName: 'ASC',
+          companyName: 'ASC',
+          customerCode: 'ASC',
+        },
+      }),
+      this.getInvoices(),
+      this.getBillingRules(),
+    ]);
+
+    const today = this.startOfDay(new Date());
+    const startOfToday = today.getTime();
+
+    const byCustomerId = new Map<string, Bill[]>();
+    const byCustomerCode = new Map<string, Bill[]>();
+
+    for (const invoice of invoices) {
+      const customerId = String(invoice.customer?.id ?? '').trim();
+      const customerCode = String(invoice.customer?.customerCode ?? '').trim();
+      if (customerId) {
+        const items = byCustomerId.get(customerId) ?? [];
+        items.push(invoice);
+        byCustomerId.set(customerId, items);
+      }
+      if (customerCode) {
+        const items = byCustomerCode.get(customerCode) ?? [];
+        items.push(invoice);
+        byCustomerCode.set(customerCode, items);
+      }
+    }
+
+    const rulesById = new Map(rules.map((rule) => [String(rule.id).trim(), rule]));
+    const rulesByName = new Map(
+      rules
+        .map((rule) => [String(rule.name ?? '').trim().toLowerCase(), rule] as const)
+        .filter(([name]) => Boolean(name)),
+    );
+
+    const findRuleByHints = (
+      ids: Array<string | null | undefined>,
+      names: Array<string | null | undefined>,
+    ) => {
+      for (const rawId of ids) {
+        const id = String(rawId ?? '').trim();
+        if (!id) continue;
+        const found = rulesById.get(id);
+        if (found) return found;
+      }
+      for (const rawName of names) {
+        const name = String(rawName ?? '').trim().toLowerCase();
+        if (!name) continue;
+        const found = rulesByName.get(name);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const descByTimeline = (a: Bill, b: Bill) =>
+      this.getInvoiceTimelineDateForEngine(b).getTime() - this.getInvoiceTimelineDateForEngine(a).getTime();
+
+    const ascByRelease = (a: Bill, b: Bill) => {
+      const aDate = this.getQueuedReleaseDateForEngine(a);
+      const bDate = this.getQueuedReleaseDateForEngine(b);
+      if (aDate && bDate) return aDate.getTime() - bDate.getTime();
+      if (aDate) return -1;
+      if (bDate) return 1;
+      return this.getInvoiceTimelineDateForEngine(a).getTime() - this.getInvoiceTimelineDateForEngine(b).getTime();
+    };
+
+    return customers
+      .map((customer) => {
+        const customerId = String(customer.id ?? '').trim();
+        const customerCode = String(customer.customerCode ?? '').trim();
+        const customerInvoices = [
+          ...(byCustomerId.get(customerId) ?? []),
+          ...(byCustomerCode.get(customerCode) ?? []),
+        ];
+        const uniqueCustomerInvoices = Array.from(
+          new Map(customerInvoices.map((invoice) => [invoice.id, invoice])).values(),
+        );
+
+        const releasedCustomerInvoices = uniqueCustomerInvoices
+          .filter((invoice) => this.isInvoiceReleasedForEngine(invoice, today))
+          .sort(descByTimeline);
+        const queuedCustomerInvoices = uniqueCustomerInvoices
+          .filter((invoice) => !this.isInvoiceReleasedForEngine(invoice, today))
+          .sort(ascByRelease);
+
+        const currentInvoice = releasedCustomerInvoices[0];
+        const queuedInvoice = queuedCustomerInvoices[0];
+        const latestBlockingCarryForwardInvoice =
+          releasedCustomerInvoices.find((invoice) => {
+            const normalizedStatus = this.normalizeInvoiceOperationalStatus(invoice.status);
+            if (this.isInvoiceClosedStatus(normalizedStatus)) {
+              return false;
+            }
+            return Array.isArray(invoice.adjustments)
+              && invoice.adjustments.some((adjustment) =>
+                String(adjustment.description ?? '')
+                  .trim()
+                  .toLowerCase()
+                  .startsWith('previous unpaid balance'),
+              );
+          }) ?? null;
+
+        const resolvedRule = findRuleByHints(
+          [
+            queuedInvoice?.billingRuleId,
+            queuedInvoice?.billingRuleId,
+            currentInvoice?.billingRuleId,
+            currentInvoice?.billingRuleId,
+            customer.billingRuleId,
+          ],
+          [
+            queuedInvoice?.billingRuleName,
+            currentInvoice?.billingRuleName,
+            customer.billingRuleName,
+          ],
+        );
+
+        const inferredBillingMode: 'fixed' | 'anniversary' =
+          String(resolvedRule?.billingType ?? '').trim().toLowerCase() === 'anniversary'
+            ? 'anniversary'
+            : 'fixed';
+        const cycleMode = this.normalizeRuleMode(String(resolvedRule?.billingMode ?? 'monthly'));
+        const cycleMonths = this.getCycleMonths(
+          this.resolveBillingCycle(undefined, cycleMode, BillingCycle.MONTHLY),
+          this.normalizePositiveInt(resolvedRule?.customMonths, null),
+        );
+        const fixedBillingDay = this.normalizePositiveInt(resolvedRule?.fixedBillingDay, 1);
+        const dueAfterDays =
+          resolvedRule?.dueAfterDays === null || resolvedRule?.dueAfterDays === undefined
+            ? null
+            : this.normalizeNonNegativeInt(resolvedRule.dueAfterDays, 0);
+
+        if (!currentInvoice) {
+          return {
+            customerId,
+            customerCode: customerCode || '—',
+            customerName: this.getCustomerDisplayName(customer),
+            currentInvoiceNo: '—',
+            currentInvoiceStatus: 'none',
+            billingMode: inferredBillingMode,
+            billingCycleMode: resolvedRule?.billingMode ?? null,
+            customMonths: this.normalizePositiveInt(resolvedRule?.customMonths, null),
+            fixedBillingDay,
+            dueAfterDays,
+            ruleId: resolvedRule?.id ?? customer.billingRuleId ?? null,
+            ruleName: resolvedRule?.name ?? customer.billingRuleName ?? null,
+            releaseDate: null,
+            nextPaymentDate: null,
+            status: 'no_invoice',
+          } satisfies BillingEngineRow;
+        }
+
+        if (latestBlockingCarryForwardInvoice) {
+          return {
+            customerId,
+            customerCode: customerCode || '—',
+            customerName: this.getCustomerDisplayName(customer),
+            currentInvoiceId: latestBlockingCarryForwardInvoice.id,
+            currentInvoiceNo: this.formatInvoiceNoForEngine(latestBlockingCarryForwardInvoice),
+            currentInvoiceStatus: String(latestBlockingCarryForwardInvoice.status ?? 'unpaid'),
+            billingMode: inferredBillingMode,
+            billingCycleMode: resolvedRule?.billingMode ?? null,
+            customMonths: this.normalizePositiveInt(resolvedRule?.customMonths, null),
+            fixedBillingDay,
+            dueAfterDays,
+            ruleId: resolvedRule?.id ?? customer.billingRuleId ?? null,
+            ruleName: resolvedRule?.name ?? customer.billingRuleName ?? null,
+            releaseDate: null,
+            nextPaymentDate: null,
+            status: 'no_invoice',
+          } satisfies BillingEngineRow;
+        }
+
+        if (queuedInvoice) {
+          const queuedReleaseDate = this.getQueuedReleaseDateForEngine(queuedInvoice);
+          let nextPaymentDate = this.parseDateOnly(queuedInvoice.dueDate || '');
+          if (!nextPaymentDate && queuedReleaseDate) {
+            nextPaymentDate = this.getEngineDueDate(queuedReleaseDate, inferredBillingMode, dueAfterDays);
+          }
+
+          let queuedStatus: BillingEngineRow['status'] = 'scheduled';
+          if (queuedReleaseDate && queuedReleaseDate.getTime() <= startOfToday) {
+            queuedStatus = 'ready_to_release';
+          }
+
+          return {
+            customerId,
+            customerCode: customerCode || '—',
+            customerName: this.getCustomerDisplayName(customer),
+            currentInvoiceId: currentInvoice?.id,
+            queuedInvoiceId: queuedInvoice.id,
+            currentInvoiceNo: this.formatInvoiceNoForEngine(currentInvoice),
+            currentInvoiceStatus: String(currentInvoice?.status ?? 'none'),
+            billingMode: inferredBillingMode,
+            billingCycleMode: resolvedRule?.billingMode ?? null,
+            customMonths: this.normalizePositiveInt(resolvedRule?.customMonths, null),
+            fixedBillingDay,
+            dueAfterDays,
+            ruleId: resolvedRule?.id ?? customer.billingRuleId ?? null,
+            ruleName: resolvedRule?.name ?? customer.billingRuleName ?? null,
+            releaseDate: queuedReleaseDate ? this.toDateString(queuedReleaseDate) : null,
+            nextPaymentDate: nextPaymentDate ? this.toDateString(nextPaymentDate) : null,
+            status: queuedStatus,
+          } satisfies BillingEngineRow;
+        }
+
+        const referenceDate = this.getInvoiceTimelineDateForEngine(currentInvoice);
+        const currentPeriodEndDate = this.parseDateOnly(currentInvoice.billingPeriodTo || '');
+
+        let releaseDate: Date | null = null;
+        let nextPaymentDate: Date | null = null;
+
+        if (inferredBillingMode === 'fixed') {
+          const fixedAnchor = currentPeriodEndDate || referenceDate;
+          releaseDate = this.getNextFixedReleaseDateForEngine(
+            fixedAnchor,
+            fixedBillingDay ?? 1,
+            cycleMonths,
+          );
+          nextPaymentDate = this.getEngineDueDate(releaseDate, inferredBillingMode, dueAfterDays);
+        } else if (currentPeriodEndDate) {
+          const releaseLeadDays = Math.max(0, dueAfterDays ?? 15);
+          releaseDate = this.addDays(this.startOfDay(currentPeriodEndDate), -releaseLeadDays);
+          nextPaymentDate = this.startOfDay(currentPeriodEndDate);
+        } else {
+          releaseDate = this.getNextAnniversaryReleaseDateForEngine(referenceDate, cycleMonths);
+          nextPaymentDate = this.getEngineDueDate(releaseDate, inferredBillingMode, dueAfterDays);
+        }
+
+        let rowStatus: BillingEngineRow['status'] = 'scheduled';
+        if (releaseDate && releaseDate.getTime() <= startOfToday) {
+          rowStatus = 'ready_to_release';
+        }
+
+        return {
+          customerId,
+          customerCode: customerCode || '—',
+          customerName: this.getCustomerDisplayName(customer),
+          currentInvoiceId: currentInvoice.id,
+          currentInvoiceNo: this.formatInvoiceNoForEngine(currentInvoice),
+          currentInvoiceStatus: String(currentInvoice.status ?? 'none'),
+          billingMode: inferredBillingMode,
+          billingCycleMode: resolvedRule?.billingMode ?? null,
+          customMonths: this.normalizePositiveInt(resolvedRule?.customMonths, null),
+          fixedBillingDay,
+          dueAfterDays,
+          ruleId: resolvedRule?.id ?? customer.billingRuleId ?? null,
+          ruleName: resolvedRule?.name ?? customer.billingRuleName ?? null,
+          releaseDate: releaseDate ? this.toDateString(releaseDate) : null,
+          nextPaymentDate: nextPaymentDate ? this.toDateString(nextPaymentDate) : null,
+          status: rowStatus,
+        } satisfies BillingEngineRow;
+      })
+      .sort((a, b) => a.customerName.localeCompare(b.customerName));
   }
 
   async getReceipts() {
@@ -1051,16 +1334,19 @@ export class BillingService {
       }) ?? null;
     const isManualOneTime = options?.manualOneTime === true;
     const now = new Date();
-    const invoiceDateText = this.toDateString(now);
+    const explicitReleaseDate = this.parseDateOnly(options?.releaseDate?.trim() || '');
+    const releaseAnchorDate = explicitReleaseDate ?? now;
+    const invoiceDateText = this.toDateString(releaseAnchorDate);
 
     if (isManualOneTime) {
       const resolvedDueAfterDays = this.resolveDueAfterDays(options?.dueAfterDays, 7);
       const invoice = this.billsRepository.create({
         customer,
         subscription: latestSubscription,
-        invoiceNo: await this.generateInvoiceNo(now),
+        invoiceNo: await this.generateInvoiceNo(releaseAnchorDate),
         invoiceType: 'manual_one_time',
         invoiceDate: invoiceDateText,
+        releaseDate: invoiceDateText,
         billingPeriodFrom: invoiceDateText,
         billingPeriodTo: invoiceDateText,
         billingCycle: BillingCycle.CUSTOM,
@@ -1187,7 +1473,9 @@ export class BillingService {
         : latestInvoice?.billingDay ?? periodStartDate.getDate();
     const resolvedDueDate =
       effectiveFirstInvoiceMode === 'fixed'
-        ? this.getNextDayOccurrence(periodStartDate, resolvedFixedDueDay)
+        ? resolvedDueAfterDays >= 0
+          ? this.addDays(releaseAnchorDate, resolvedDueAfterDays)
+          : this.getNextDayOccurrence(releaseAnchorDate, resolvedFixedDueDay)
         : this.addDays(periodStartDate, resolvedDueAfterDays);
 
     const monthlyFee = this.toNumber(latestSubscription.plan.monthlyFee);
@@ -1220,8 +1508,7 @@ export class BillingService {
     });
     const carryForwardInvoices = openCarryForwardInvoices.filter((invoiceCandidate) => {
       if (!invoiceCandidate.id || invoiceCandidate.id === replaceInvoiceId) return false;
-      const normalizedStatus = this.normalizeInvoiceOperationalStatus(invoiceCandidate.status);
-      return normalizedStatus === 'unpaid' || normalizedStatus === 'overdue';
+      return this.isInvoiceEligibleForCarryForward(invoiceCandidate, now);
     });
     const installationFee = isFirstInvoice
       ? this.roundTo2(this.toNumber(customer.defaultInstallationFee))
@@ -1238,9 +1525,10 @@ export class BillingService {
     const invoice = this.billsRepository.create({
       customer,
       subscription: latestSubscription,
-      invoiceNo: await this.generateInvoiceNo(now),
+      invoiceNo: await this.generateInvoiceNo(releaseAnchorDate),
       invoiceType: 'auto',
       invoiceDate: invoiceDateText,
+      releaseDate: invoiceDateText,
       billingPeriodFrom: period.from,
       billingPeriodTo: period.to,
       billingCycle: resolvedCycle,
@@ -1847,6 +2135,113 @@ export class BillingService {
     );
   }
 
+
+  private getCustomerDisplayName(customer: Customer) {
+    return String(customer.personalName ?? customer.companyName ?? 'Unknown Customer').trim() || 'Unknown Customer';
+  }
+
+  private formatInvoiceNoForEngine(invoice?: Bill | null) {
+    const rawInvoiceNo = String(invoice?.invoiceNo ?? '').trim();
+    if (rawInvoiceNo) return rawInvoiceNo;
+    const rawId = String(invoice?.id ?? '').trim();
+    if (!rawId) return '—';
+    return `INV-${rawId.slice(0, 8).toUpperCase()}`;
+  }
+
+  private startOfDay(date: Date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+
+  private addMonthsSafeForEngine(date: Date, months: number) {
+    const base = new Date(date);
+    const target = new Date(base.getFullYear(), base.getMonth() + months, 1);
+    const maxDay = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+    target.setDate(Math.min(base.getDate(), maxDay));
+    return target;
+  }
+
+  private getInvoiceTimelineDateForEngine(invoice?: Bill | null) {
+    return (
+      this.parseDateOnly(invoice?.billingPeriodTo || '') ||
+      this.parseDateOnly(invoice?.dueDate || '') ||
+      this.parseDateOnly(invoice?.releaseDate || '') ||
+      this.parseDateOnly(invoice?.invoiceDate || '') ||
+      (invoice?.paidAt ? new Date(invoice.paidAt) : null) ||
+      new Date(0)
+    );
+  }
+
+  private getQueuedReleaseDateForEngine(invoice?: Bill | null) {
+    return (
+      this.parseDateOnly(invoice?.releaseDate || '') ||
+      this.parseDateOnly(invoice?.billingPeriodFrom || '') ||
+      this.parseDateOnly(invoice?.invoiceDate || '') ||
+      null
+    );
+  }
+
+  private isInvoiceReleasedForEngine(invoice: Bill, now = new Date()) {
+    const normalizedStatus = String(invoice.status ?? '').trim().toLowerCase();
+    if (['scheduled', 'pending_release', 'queued', 'draft'].includes(normalizedStatus)) {
+      return false;
+    }
+    const releaseDate = this.getQueuedReleaseDateForEngine(invoice);
+    if (!releaseDate) return true;
+    return this.startOfDay(releaseDate).getTime() <= this.startOfDay(now).getTime();
+  }
+
+  private getNextFixedReleaseDateForEngine(afterDate: Date, fixedDay: number, cycleMonths: number) {
+    const normalizedAfter = this.startOfDay(afterDate);
+    const currentMonthDay = Math.min(
+      fixedDay,
+      new Date(normalizedAfter.getFullYear(), normalizedAfter.getMonth() + 1, 0).getDate(),
+    );
+    let candidate = new Date(
+      normalizedAfter.getFullYear(),
+      normalizedAfter.getMonth(),
+      currentMonthDay,
+    );
+    if (candidate <= normalizedAfter) {
+      const stepped = this.addMonthsSafeForEngine(
+        new Date(normalizedAfter.getFullYear(), normalizedAfter.getMonth(), 1),
+        Math.max(1, cycleMonths),
+      );
+      const steppedDay = Math.min(
+        fixedDay,
+        new Date(stepped.getFullYear(), stepped.getMonth() + 1, 0).getDate(),
+      );
+      candidate = new Date(stepped.getFullYear(), stepped.getMonth(), steppedDay);
+    }
+    return candidate;
+  }
+
+  private getNextAnniversaryReleaseDateForEngine(afterDate: Date, cycleMonths: number) {
+    const normalizedAfter = this.startOfDay(afterDate);
+    let candidate = this.addMonthsSafeForEngine(
+      new Date(normalizedAfter.getFullYear(), normalizedAfter.getMonth(), 1),
+      Math.max(1, cycleMonths),
+    );
+    candidate = new Date(candidate.getFullYear(), candidate.getMonth(), 1);
+    if (candidate <= normalizedAfter) {
+      const stepped = this.addMonthsSafeForEngine(candidate, Math.max(1, cycleMonths));
+      candidate = new Date(stepped.getFullYear(), stepped.getMonth(), 1);
+    }
+    return candidate;
+  }
+
+  private getEngineDueDate(
+    releaseDate: Date,
+    billingType: 'fixed' | 'anniversary',
+    dueAfterDays: number | null,
+  ) {
+    if (dueAfterDays !== null) {
+      return this.addDays(releaseDate, dueAfterDays);
+    }
+    return billingType === 'fixed'
+      ? this.getNextDayOccurrence(releaseDate, 15)
+      : this.addDays(releaseDate, 14);
+  }
+
   private getCollectionEvents(invoice: Bill): InvoiceCollectionEvent[] {
     if (!Array.isArray(invoice.collectionEvents)) {
       return [];
@@ -1876,6 +2271,22 @@ export class BillingService {
 
   private generateCollectionEventId(timestamp: string): string {
     return `${timestamp}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private isInvoicePastDue(invoice: Pick<Bill, 'dueDate' | 'status'>, today = new Date()) {
+    const dueDate = this.parseDateOnly(invoice.dueDate || '');
+    if (!dueDate) return false;
+
+    const dueDay = new Date(dueDate.getFullYear(), dueDate.getMonth(), dueDate.getDate());
+    const todayDay = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    return dueDay.getTime() < todayDay.getTime();
+  }
+
+  private isInvoiceEligibleForCarryForward(invoice: Bill, today = new Date()) {
+    const normalizedStatus = this.normalizeInvoiceOperationalStatus(invoice.status);
+    if (normalizedStatus === 'overdue') return true;
+    if (normalizedStatus !== 'unpaid') return false;
+    return this.isInvoicePastDue(invoice, today);
   }
 
   private async invoiceHasCarriedForwardBalance(invoiceId?: string | null) {

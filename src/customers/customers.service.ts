@@ -610,6 +610,7 @@ export class CustomersService {
       billingRuleName: customer.billingRuleName ?? null,
       invoiceType: 'auto',
       invoiceDate,
+      releaseDate: invoiceDate,
       billingPeriodFrom: billingPeriodStart,
       billingPeriodTo: billingPeriodEnd,
       billingCycle: dto.billingInformation.billingCycle ?? BillingCycle.MONTHLY,

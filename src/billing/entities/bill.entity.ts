@@ -71,6 +71,9 @@ export class Bill {
   invoiceDate?: string | null;
 
   @Column({ type: 'date', nullable: true })
+  releaseDate?: string | null;
+
+  @Column({ type: 'date', nullable: true })
   billingPeriodFrom?: string | null;
 
   @Column({ type: 'date', nullable: true })
