@@ -13,6 +13,7 @@ import { SubscriptionNetworksModule } from './subscription-networks/subscription
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { UsersModule } from './users/users.module';
 import { TechnicianApiModule } from './technician-api/technician-api.module';
+import { SystemSettingsModule } from './system-settings/system-settings.module';
 
 @Module({
   imports: [
@@ -70,6 +71,7 @@ import { TechnicianApiModule } from './technician-api/technician-api.module';
     BillingModule,
     AuthModule,
     TechnicianApiModule,
+    SystemSettingsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
